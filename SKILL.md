@@ -1,19 +1,19 @@
 ---
-name: melina
+name: tradjs
 description: Bun-native web framework with file routing. Use this for building server-rendered pages with client mount scripts for interactivity.
 ---
 
-# Melina.js — Framework Skill
+# TradJS — Framework Skill
 
-Melina.js is a Bun-native web framework. Pages are server-rendered JSX, client interactivity is added via **mount scripts** — `.client.tsx` files compiled to lightweight VNodes with a ~2KB reconciler runtime.
+TradJS is a Bun-native web framework. Pages are server-rendered JSX, client interactivity is added via **mount scripts** — `.client.tsx` files compiled to lightweight VNodes with a ~2KB reconciler runtime.
 
-**Current version: 2.3.1**
+**Current version: 2.5.8**
 
 ---
 
-## 1. When to Use Melina
+## 1. When to Use TradJS
 
-Use Melina when the user wants:
+Use TradJS when the user wants:
 - Server-rendered HTML pages with file-based routing (Next.js App Router style)
 - Client-side interactivity WITHOUT a full SPA framework (no React on the client)
 - CSS styling (Tailwind CSS v4 or vanilla CSS)
@@ -22,7 +22,7 @@ Use Melina when the user wants:
 - Lightweight client bundles (zero React, zero framework overhead)
 - Static Site Generation (SSG) for pre-rendered pages
 
-Melina replaces the full Next.js / Vite stack — server pages, API routes, SSG, and client interactivity — with zero React on the client.
+TradJS replaces the full Next.js / Vite stack — server pages, API routes, SSG, and client interactivity — with zero React on the client.
 
 ---
 
@@ -33,20 +33,16 @@ Melina replaces the full Next.js / Vite stack — server pages, API routes, SSG,
 ```bash
 mkdir my-app && cd my-app
 bun init -y
-bun add melina
+bun add tradjs
 ```
 
 Create `server.ts`:
 
 ```ts
-import { start } from 'melina';
-import path from 'path';
+import { serve } from 'tradjs';
 
-const appDir = path.join(import.meta.dir, 'app');
-
-await start({
+await serve({
     port: parseInt(process.env.BUN_PORT || "3000"),
-    appDir,
     defaultTitle: 'My App',
 });
 ```
@@ -57,7 +53,7 @@ Create `tsconfig.json`:
 {
     "compilerOptions": {
         "jsx": "react-jsx",
-        "jsxImportSource": "melina/client",
+        "jsxImportSource": "tradjs/client",
         "target": "ESNext",
         "module": "ESNext",
         "moduleResolution": "bundler",
@@ -65,15 +61,15 @@ Create `tsconfig.json`:
         "noEmit": true,
         "skipLibCheck": true
     },
-    "include": ["app/**/*", "server.ts"]
+    "include": ["app/**/*"]
 }
 ```
 
-> **Critical**: `"jsxImportSource": "melina/client"` is required. This tells TypeScript and Bun to use Melina's VDOM runtime for JSX instead of React.
+> **Critical**: `"jsxImportSource": "tradjs/client"` is required. This tells TypeScript and Bun to use TradJS's VDOM runtime for JSX instead of React.
 
-### Within the Melina.js monorepo
+### Within the TradJS monorepo
 
-When building examples inside the `melina.js` repo, import from local source:
+When building examples inside the `tradjs` repo, import from local source:
 
 ```ts
 // server.ts (inside examples/)
@@ -86,8 +82,8 @@ And use `paths` in `tsconfig.json`:
 {
     "compilerOptions": {
         "paths": {
-            "melina/client/*": ["../../src/client/*"],
-            "melina/*": ["../../src/*"]
+            "tradjs/client/*": ["../../src/client/*"],
+            "tradjs/*": ["../../src/*"]
         }
     }
 }

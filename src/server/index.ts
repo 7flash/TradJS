@@ -59,7 +59,7 @@ export {
 export type { RouteExpectation } from "./router-contract";
 
 // SSR
-export { renderToString } from "./ssr";
+export { renderToString, renderToStringAsync } from "./ssr";
 
 // Head component (declarative <head> management)
 export { Head } from "./head";
