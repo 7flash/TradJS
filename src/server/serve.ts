@@ -6,11 +6,11 @@
  */
 
 import { unlink } from 'fs/promises';
+import net from 'node:net';
 import { measure } from 'measure-fn';
 import type { MeasureFn } from 'measure-fn';
 import { builtAssets, getContentType } from "./build";
 import type { Handler } from "./types";
-import { startHotReload, handleHotReloadSSE } from './hot-reload';
 
 const isDev = process.env.NODE_ENV !== "production";
 
@@ -50,7 +50,7 @@ function isAddressInUseError(error: any): boolean {
  * Automatically determines port or unix socket from BUN_PORT env var or CLI arg.
  * Handles cleanup and graceful shutdown automatically.
  */
-export async function serve(handler: Handler, options?: { port?: number; unix?: string; websocket?: any; hotReload?: boolean }) {
+export async function serve(handler: Handler, options?: { port?: number; unix?: string; websocket?: any }) {
     // Automatic detection logic
     let port: number | undefined;
     let unix: string | undefined;
@@ -89,7 +89,19 @@ export async function serve(handler: Handler, options?: { port?: number; unix?: 
 
     if (!port && !unix) {
         shouldAutoFindPort = true;
-        port = findAvailablePort(autoFindStartPort);
+        port = autoFindStartPort;
+    }
+
+    // On Windows/Bun, attempting to bind an occupied port may not reliably throw
+    // before a misleading server object is returned. Preflight using real TCP
+    // connection checks against both loopback families whenever automatic port
+    // selection is enabled.
+    if (!unix && shouldAutoFindPort) {
+        const requestedPort = port ?? autoFindStartPort;
+        port = await findAvailablePort(requestedPort);
+        if (port !== requestedPort) {
+            console.log(`⚠️  Port ${requestedPort} is busy, using port ${port}`);
+        }
     }
 
     if (port !== undefined && unix) {
@@ -109,8 +121,6 @@ export async function serve(handler: Handler, options?: { port?: number; unix?: 
     }
 
     const hasWebSocket = !!options?.websocket;
-    const hotReloadEnabled = isDev && options?.hotReload === true;
-
     const args: any = {
         idleTimeout: 0,
         development: isDev,
@@ -124,11 +134,6 @@ export async function serve(handler: Handler, options?: { port?: number; unix?: 
             try {
                 const url = new URL(req.url);
                 const pathname = url.pathname;
-
-                // Hot reload SSE endpoint (dev only, opt-in)
-                if (hotReloadEnabled && pathname === '/__melina_hmr') {
-                    return handleHotReloadSSE();
-                }
 
                 // WebSocket upgrade — when a websocket handler is configured,
                 // automatically upgrade requests with the Upgrade header
@@ -278,8 +283,8 @@ export async function serve(handler: Handler, options?: { port?: number; unix?: 
     } catch (err: any) {
         if (!unix && shouldAutoFindPort && isAddressInUseError(err)) {
             const fallbackStart = Math.max((port ?? autoFindStartPort) + 1, autoFindStartPort + 1);
-            args.port = findAvailablePort(fallbackStart);
-            console.warn(`⚠️  Port ${port} in use, falling back to port ${args.port}`);
+            args.port = await findAvailablePort(fallbackStart);
+            console.log(`⚠️  Port ${port} is busy, using port ${args.port}`);
             server = Bun.serve(args);
         } else {
             throw err;
@@ -291,9 +296,6 @@ export async function serve(handler: Handler, options?: { port?: number; unix?: 
     } else {
         console.log(`🦊 tradjs server running at http://localhost:${server.port}`);
     }
-
-    // Start hot reload watcher in dev mode only when explicitly enabled
-    if (hotReloadEnabled) startHotReload();
 
     // Graceful shutdown
     const shutdown = async (signal: string) => {
@@ -313,23 +315,36 @@ export async function serve(handler: Handler, options?: { port?: number; unix?: 
 
 // ─── Port Discovery ─────────────────────────────────────────────────────────────
 
-export function findAvailablePort(startPort: number = 3000): number {
+async function canConnectToPort(port: number, host: string): Promise<boolean> {
+    return await new Promise<boolean>((resolve) => {
+        const socket = net.createConnection({ port, host });
+
+        const finish = (result: boolean) => {
+            socket.removeAllListeners();
+            socket.destroy();
+            resolve(result);
+        };
+
+        socket.once('connect', () => finish(true));
+        socket.once('timeout', () => finish(false));
+        socket.once('error', () => finish(false));
+        socket.setTimeout(200);
+    });
+}
+
+async function isPortInUse(port: number): Promise<boolean> {
+    const [v4, v6] = await Promise.allSettled([
+        canConnectToPort(port, '127.0.0.1'),
+        canConnectToPort(port, '::1'),
+    ]);
+
+    return [v4, v6].some((result) => result.status === 'fulfilled' && result.value);
+}
+
+export async function findAvailablePort(startPort: number = 3000): Promise<number> {
     for (let port = startPort; port < startPort + 100; port++) {
-        try {
-            const listener = Bun.listen({
-                port,
-                hostname: '127.0.0.1',
-                socket: {
-                    close() { },
-                    data() { },
-                },
-            });
-            listener.stop();
+        if (!(await isPortInUse(port))) {
             return port;
-        } catch (e: any) {
-            if (!isAddressInUseError(e)) {
-                throw e;
-            }
         }
     }
     throw new Error(`No available port found in range ${startPort}-${startPort + 99}`);
