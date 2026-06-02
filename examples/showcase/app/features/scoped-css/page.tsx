@@ -4,7 +4,7 @@ export default function ScopedCssDemoPage() {
             <div className="page-header">
                 <h1 className="page-title scoped-title">Scoped CSS</h1>
                 <p className="page-description">
-                    Per-page stylesheets that can't leak into other pages — powered by <code>[data-page]</code> auto-prefixing.
+                    Per-page stylesheets that can't leak into other pages — powered by <code>body[data-page]</code> auto-prefixing.
                 </p>
             </div>
 
@@ -35,9 +35,9 @@ export default function ScopedCssDemoPage() {
 #   .scoped-box { border-radius: 12px; }
 # 
 # OUTPUT (after buildScopedStyle):
-#   [data-page="/features/scoped-css"] .scoped-box { border-radius: 12px; }
+#   body[data-page="/features/scoped-css"] .scoped-box { border-radius: 12px; }
 #
-# The [data-page] prefix ensures these styles
+# The body[data-page] prefix ensures these styles
 # ONLY match elements inside this specific page.`}
                 </div>
             </div>
@@ -47,13 +47,13 @@ export default function ScopedCssDemoPage() {
                 <div className="code-block">
                     {`1. Route discovery finds page.css next to page.tsx
 2. buildScopedStyle() processes the CSS:
-   - Prefixes all selectors with [data-page="/route"]
+   - Prefixes all selectors with body[data-page="/route"]
    - Handles @media, @keyframes, :root, html/body
    - Runs PostCSS (autoprefixer + tailwind)
    - Caches the output (hash-based filename)
 3. At runtime:
    - <link> tag injected into <head>
-   - data-page attribute set on #melina-page-content
+   - data-page attribute set on <body>
    - Styles only match elements inside this page`}
                 </div>
             </div>
@@ -65,8 +65,8 @@ export default function ScopedCssDemoPage() {
                 </p>
                 <ul style={{ color: 'var(--color-text-secondary)', lineHeight: '2', paddingLeft: '20px' }}>
                     <li><strong>{'<head>'}</strong> — look for a <code>{'<link>'}</code> tag with <code>page-features-scoped-css-*.css</code></li>
-                    <li><strong>#melina-page-content</strong> — has <code>data-page="/features/scoped-css"</code> attribute</li>
-                    <li><strong>CSS rules</strong> — every selector starts with <code>[data-page="/features/scoped-css"]</code></li>
+                    <li><strong>{'<body>'}</strong> — has <code>data-page="/features/scoped-css"</code> attribute</li>
+                    <li><strong>CSS rules</strong> — every selector starts with <code>body[data-page="/features/scoped-css"]</code></li>
                 </ul>
             </div>
 

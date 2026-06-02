@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach, afterAll } from "bun:test";
-import { buildScript, buildStyle, buildAsset, asset, serve, clearCaches, createAppRouter } from "../src/web";
+import { buildScript, buildStyle, buildAsset, buildClientScript, asset, serve, clearCaches, createAppRouter } from "../src/web";
 import { imports } from "../src/server/imports";
 import { writeFileSync, mkdirSync, rmSync } from "fs";
 import path from "path";
@@ -190,6 +190,44 @@ describe("buildScript", () => {
 
     if (originalPkg) {
       writeFileSync(pkgPath, originalPkg);
+    }
+  });
+});
+
+describe("buildClientScript", () => {
+  test("should only log actually stubbed installed server-only packages", async () => {
+    const pkgPath = path.join(process.cwd(), "package.json");
+    const originalPkg = await Bun.file(pkgPath).exists() ? await Bun.file(pkgPath).text() : null;
+    const clientPath = path.join(testDir, "client.ts");
+
+    writeFileSync(pkgPath, JSON.stringify({
+      name: "test-project",
+      dependencies: {}
+    }));
+
+    writeFileSync(clientPath, "console.log('client');");
+
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (message?: any) => {
+      warnings.push(String(message ?? ""));
+    };
+
+    try {
+      await buildClientScript(clientPath);
+
+      const stubWarnings = warnings.filter(message =>
+        message.includes("Server-only packages stubbed for browser:")
+      );
+
+      expect(stubWarnings.length).toBe(0);
+      expect(warnings.join("\n")).not.toContain("telegram");
+    } finally {
+      console.warn = originalWarn;
+      if (originalPkg) {
+        writeFileSync(pkgPath, originalPkg);
+      }
+      clearCaches();
     }
   });
 });
@@ -410,7 +448,7 @@ describe("serve", () => {
 
     writeFileSync(path.join(appDir, "layout.tsx"), `
       export default function RootLayout({ children }: { children: any }) {
-        return <html><head><title>Test App</title></head><body><main id="melina-page-content">{children}</main></body></html>;
+        return <html><head><title>Test App</title></head><body><main>{children}</main></body></html>;
       }
     `);
     writeFileSync(path.join(appDir, "page.tsx"), `
@@ -436,7 +474,7 @@ describe("serve", () => {
 
     writeFileSync(path.join(appDir, "layout.tsx"), `
       export default function RootLayout({ children }: { children: any }) {
-        return <html><head><title>Stream Test</title></head><body><main id="melina-page-content">{children}</main></body></html>;
+        return <html><head><title>Stream Test</title></head><body><main>{children}</main></body></html>;
       }
     `);
     writeFileSync(path.join(appDir, "page.tsx"), `
@@ -473,7 +511,7 @@ describe("serve", () => {
 
     writeFileSync(path.join(rootDir, "layout.tsx"), `
       export default function RootLayout({ children }: { children: any }) {
-        return <html><head><title>Root App</title></head><body><main id="melina-page-content">{children}</main></body></html>;
+        return <html><head><title>Root App</title></head><body><main>{children}</main></body></html>;
       }
     `);
     writeFileSync(path.join(rootDir, "page.tsx"), `
@@ -723,7 +761,7 @@ describe("serve", () => {
     server.stop();
   });
 
-  test("should not expose HMR endpoint by default", async () => {
+  test("should treat the old HMR endpoint like a normal route when no handler matches it", async () => {
     const handler = () => "OK";
     const server = await serve(handler, { port: getRandomPort() });
 
@@ -735,17 +773,6 @@ describe("serve", () => {
     server.stop();
   });
 
-  test("should expose HMR endpoint only when hotReload is enabled", async () => {
-    const handler = () => "OK";
-    const server = await serve(handler, { port: getRandomPort(), hotReload: true });
-
-    const response = await fetch(`http://localhost:${server.port}/__melina_hmr`);
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("text/event-stream");
-
-    server.stop();
-  });
 });
 
 describe("getContentType", () => {

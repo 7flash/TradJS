@@ -21,6 +21,14 @@ import type { Handler, FrontendAppOptions, RenderPageOptions, AppRouterOptions }
 const isDev = process.env.NODE_ENV !== "production";
 const STREAM_SLOT_MARKUP = '<tradjs-stream-slot></tradjs-stream-slot>';
 
+function applyRouteBodyAttributes(html: string, routePattern: string): string {
+    if (!html.includes('<body')) return html;
+    if (/data-page=/.test(html)) {
+        return html.replace(/data-page="[^"]*"/, `data-page="${routePattern}"`);
+    }
+    return html.replace('<body', `<body data-page="${routePattern}"`);
+}
+
 async function wrapWithLayouts(tree: any, layoutPaths: string[]) {
     let wrappedTree = tree;
 
@@ -295,10 +303,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
                         fullHtml = fullHtml.replace('</head>', `${headElements.join('\n')}</head>`);
                     }
 
-                    fullHtml = fullHtml.replace(
-                        'id="melina-page-content"',
-                        `id="melina-page-content" data-page="${route.pattern}"`
-                    );
+                    fullHtml = applyRouteBodyAttributes(fullHtml, route.pattern);
 
                     return fullHtml;
                 });
@@ -479,10 +484,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
                 shellHtml = shellHtml.replace('</head>', `<link rel="stylesheet" href="${scopedStylePath}"></head>`);
             }
 
-            shellHtml = shellHtml.replace(
-                'id="melina-page-content"',
-                `id="melina-page-content" data-page="${match.route.pattern}"`
-            );
+            shellHtml = applyRouteBodyAttributes(shellHtml, match.route.pattern);
 
             if (headElements.length > 0) {
                 shellHtml = shellHtml.replace('</head>', `${headElements.join('\n')}</head>`);

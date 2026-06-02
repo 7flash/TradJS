@@ -7,7 +7,7 @@ export default function RootLayout({ children }: { children: any }) {
                 <title>Port Check</title>
             </head>
             <body>
-                <main id="melina-page-content">{children}</main>
+                <main>{children}</main>
             </body>
         </html>
     );

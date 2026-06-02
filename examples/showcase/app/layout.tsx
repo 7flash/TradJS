@@ -59,7 +59,7 @@ export default function RootLayout({ children }: { children: any }) {
                     </aside>
 
                     {/* Main Content */}
-                    <main className="main-content" id="melina-page-content">
+                    <main className="main-content">
                         {children}
                     </main>
                 </div>
