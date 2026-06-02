@@ -530,115 +530,96 @@ function getNextSibling(fiber: Fiber, parentNode: Node): Node | null {
 
 // ─── Navigation ────────────────────────────────────────────────────────────────
 
-/** The selector for the page content container that gets swapped on navigation. */
-const PAGE_CONTENT_SELECTOR = '#melina-page-content';
-
 export async function navigate(href: string, _skipPushState = false): Promise<void> {
     if (typeof window === 'undefined') return;
     try {
-        // Cleanup previous page-level scripts
-        const cleanups = (window as any).__melinaCleanups__ || [];
-        for (const { type, cleanup } of cleanups) {
-            if (type === 'page') {
-                try { cleanup(); } catch (e) { /* ignore */ }
-            }
-        }
-        (window as any).__melinaCleanups__ = cleanups.filter((c: any) => c.type !== 'page');
-
-        const response = await fetch(href, { headers: { 'X-Melina-Nav': '1' } });
+        const resolvedHref = new URL(href, window.location.href).toString();
+        const response = await fetch(resolvedHref);
         const html = await response.text();
         const newDoc = new DOMParser().parseFromString(html, 'text/html');
 
+        runPageCleanups();
+        syncHead(newDoc);
+        syncElementAttributes(document.documentElement, newDoc.documentElement);
+        syncElementAttributes(document.body, newDoc.body);
+
+        const fragment = document.createDocumentFragment();
+        while (newDoc.body.firstChild) fragment.appendChild(document.adoptNode(newDoc.body.firstChild));
+
         if (!_skipPushState) {
-            window.history.pushState({}, '', href);
+            window.history.pushState({}, '', resolvedHref);
         }
-        document.title = newDoc.title;
-
-        // Update active nav link in sidebar
-        const navPath = new URL(href, window.location.origin).pathname;
-        document.querySelectorAll('.nav-link').forEach(link => {
-            const linkHref = (link as HTMLAnchorElement).getAttribute('data-nav-href')
-                || (link as HTMLAnchorElement).getAttribute('href');
-            if (linkHref === navPath) {
-                link.classList.add('active');
-            } else {
-                link.classList.remove('active');
-            }
-        });
-
-        // Update stylesheet if changed
-        const newStyleLink = newDoc.querySelector('link[rel="stylesheet"]') as HTMLLinkElement | null;
-        const curStyleLink = document.querySelector('link[rel="stylesheet"]') as HTMLLinkElement | null;
-        if (newStyleLink && curStyleLink && newStyleLink.href !== curStyleLink.href) {
-            curStyleLink.href = newStyleLink.href;
-        } else if (newStyleLink && !curStyleLink) {
-            document.head.appendChild(newStyleLink);
-        }
-
-        // ── Layout-preserving swap ──────────────────────────────────────────
-        // Only replace the page content area, not the entire body.
-        // This keeps the sidebar, layout scripts, and SSR state intact.
-        const currentContent = document.querySelector(PAGE_CONTENT_SELECTOR);
-        const newContent = newDoc.querySelector(PAGE_CONTENT_SELECTOR);
-
-        if (currentContent && newContent) {
-            // Extract new page children
-            const fragment = document.createDocumentFragment();
-            while (newContent.firstChild) fragment.appendChild(document.adoptNode(newContent.firstChild));
-
-            const update = () => {
-                currentContent.replaceChildren(fragment);
-                window.scrollTo(0, 0);
-            };
-
-            if (document.startViewTransition) {
-                // @ts-ignore
-                await document.startViewTransition(update).finished;
-            } else {
-                update();
-            }
-
-            // Only re-execute scripts inside the page content area
-            const scripts = Array.from(currentContent.querySelectorAll('script'));
-            for (const oldScript of scripts) {
-                const newScript = document.createElement('script');
-                for (const attr of Array.from(oldScript.attributes)) {
-                    newScript.setAttribute(attr.name, attr.value);
-                }
-                if (oldScript.textContent) {
-                    newScript.textContent = oldScript.textContent;
-                }
-                oldScript.parentNode?.replaceChild(newScript, oldScript);
-            }
-        } else {
-            // Fallback: no #melina-page-content found, replace entire body
-            const fragment = document.createDocumentFragment();
-            while (newDoc.body.firstChild) fragment.appendChild(document.adoptNode(newDoc.body.firstChild));
+        const update = () => {
             document.body.replaceChildren(fragment);
             window.scrollTo(0, 0);
+        };
 
-            const scripts = Array.from(document.body.querySelectorAll('script'));
-            for (const oldScript of scripts) {
-                const newScript = document.createElement('script');
-                for (const attr of Array.from(oldScript.attributes)) {
-                    newScript.setAttribute(attr.name, attr.value);
-                }
-                if (oldScript.textContent) {
-                    newScript.textContent = oldScript.textContent;
-                }
-                oldScript.parentNode?.replaceChild(newScript, oldScript);
-            }
+        if (document.startViewTransition) {
+            // @ts-ignore
+            await document.startViewTransition(update).finished;
+        } else {
+            update();
         }
+
+        reactivateScripts(document.body);
     } catch (e) {
         window.location.href = href;
     }
 }
 
-// ─── Popstate: Handle browser back/forward ─────────────────────────────────────
-if (typeof window !== 'undefined') {
-    window.addEventListener('popstate', () => {
-        navigate(window.location.href, true);
-    });
+function runPageCleanups(): void {
+    const cleanups = Array.isArray((window as any).__melinaCleanups__)
+        ? (window as any).__melinaCleanups__
+        : [];
+
+    for (const entry of cleanups) {
+        if (!entry || typeof entry.cleanup !== 'function') continue;
+        try {
+            entry.cleanup();
+        } catch {
+            // Ignore cleanup failures during navigation.
+        }
+    }
+
+    (window as any).__melinaCleanups__ = [];
+}
+
+function syncHead(newDoc: Document): void {
+    document.title = newDoc.title;
+    replaceHeadNodes('meta[name], meta[property], meta[content]', newDoc);
+    replaceHeadNodes('link[rel="stylesheet"]', newDoc);
+    replaceHeadNodes('style', newDoc);
+    replaceHeadNodes('script[type="importmap"]', newDoc);
+}
+
+function replaceHeadNodes(selector: string, newDoc: Document): void {
+    for (const node of Array.from(document.head.querySelectorAll(selector))) {
+        node.remove();
+    }
+    for (const node of Array.from(newDoc.head.querySelectorAll(selector))) {
+        document.head.appendChild(node.cloneNode(true));
+    }
+}
+
+function syncElementAttributes(target: HTMLElement, source: HTMLElement): void {
+    for (const attr of Array.from(target.attributes)) {
+        if (!source.hasAttribute(attr.name)) target.removeAttribute(attr.name);
+    }
+    for (const attr of Array.from(source.attributes)) {
+        target.setAttribute(attr.name, attr.value);
+    }
+}
+
+function reactivateScripts(root: ParentNode): void {
+    const scripts = Array.from(root.querySelectorAll('script'));
+    for (const oldScript of scripts) {
+        const newScript = document.createElement('script');
+        for (const attr of Array.from(oldScript.attributes)) {
+            newScript.setAttribute(attr.name, attr.value);
+        }
+        if (oldScript.textContent) newScript.textContent = oldScript.textContent;
+        oldScript.parentNode?.replaceChild(newScript, oldScript);
+    }
 }
 
 export interface LinkProps extends Props { href: string; }
@@ -692,12 +673,13 @@ if (typeof window !== 'undefined' && !(window as any).__melinaNavInit__) {
     document.addEventListener('click', (e) => {
         const link = (e.target as Element).closest('a[href]') as HTMLAnchorElement;
         if (!link || link.target || !link.href.startsWith(window.location.origin)) return;
+        if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
         if (link.hasAttribute('data-no-intercept') || link.hasAttribute('download')) return;
         e.preventDefault();
-        navigate(link.pathname);
+        navigate(link.href);
     });
 
     window.addEventListener('popstate', () => {
-        navigate(window.location.pathname);
+        navigate(window.location.href, true);
     });
 }

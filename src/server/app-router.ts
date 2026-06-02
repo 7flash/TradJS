@@ -14,7 +14,6 @@ import { renderToString } from "./ssr";
 import { resetHead, getHeadElements, Head } from "./head";
 import { imports } from "./imports";
 import { buildScript, buildStyle, buildClientScript, clientScriptsUsingReact, builtAssets, getContentType, buildScopedStyle, buildAsset } from './build';
-import { getHotReloadScript, addClientScript, getClientDeps } from './hot-reload';
 import { getPrerendered, prerender as ssgPrerender } from "./ssg";
 import { serve as serveHttp } from "./serve";
 import type { Handler, FrontendAppOptions, RenderPageOptions, AppRouterOptions } from "./types";
@@ -210,7 +209,6 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
           window.__MELINA_DATA__ = ${JSON.stringify({ params, props })};
         </script>
         ${scriptVirtualPath ? `<script src="${scriptVirtualPath}" type="module"></script>` : ''}
-        ${getHotReloadScript()}
       </body>
     </html>
   `;
@@ -236,7 +234,6 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
     const {
         appDir = path.join(process.cwd(), 'app'),
         defaultTitle = 'Melina App',
-        hotReload = false,
     } = options;
 
     const routes = discoverRoutes(appDir);
@@ -407,17 +404,13 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
                 }
             }
 
-            const isNavRequest = req.headers.get('X-Melina-Nav') === '1';
             const clientScriptUrls: { url: string; type: 'layout' | 'page' }[] = [];
 
-            // For nav requests, skip layout scripts — they're already loaded in the browser
-            if (!isNavRequest) {
-                for (const layoutPath of match.route.layouts) {
-                    const layoutClientPath = layoutPath.replace(/\.tsx?$/, '.client.tsx');
-                    if (existsSync(layoutClientPath)) {
-                        const scriptPath = await buildClientScript(layoutClientPath);
-                        clientScriptUrls.push({ url: scriptPath, type: 'layout' });
-                    }
+            for (const layoutPath of match.route.layouts) {
+                const layoutClientPath = layoutPath.replace(/\.tsx?$/, '.client.tsx');
+                if (existsSync(layoutClientPath)) {
+                    const scriptPath = await buildClientScript(layoutClientPath);
+                    clientScriptUrls.push({ url: scriptPath, type: 'layout' });
                 }
             }
 
@@ -460,71 +453,10 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
                     console.warn('Failed to generate React import maps:', e);
                 }
             }
-            if (isDev && hotReload) {
-                for (const clientPath of allClientPaths) {
-                    const deps = getClientDeps(clientPath);
-                    addClientScript(clientPath, deps);
-                }
-            }
-
             const responseHeaders = {
                 'Content-Type': 'text/html',
                 'Cache-Control': isDev ? 'no-cache' : 'public, max-age=3600',
             };
-
-            if (isNavRequest) {
-                const tree = await wrapWithLayouts(pageTree, match.route.layouts);
-
-                resetHead();
-                const html = await m('SSR renderToString', () => renderToString(tree), (e: any) => { throw e; });
-                const headElements = getHeadElements();
-
-                let fullHtml = `<!DOCTYPE html>${html}`;
-
-                if (stylesVirtualPath) {
-                    fullHtml = fullHtml.replace('</head>', `<link rel="stylesheet" href="${stylesVirtualPath}"></head>`);
-                }
-
-                if (scopedStylePath) {
-                    fullHtml = fullHtml.replace('</head>', `<link rel="stylesheet" href="${scopedStylePath}"></head>`);
-                }
-
-                fullHtml = fullHtml.replace(
-                    'id="melina-page-content"',
-                    `id="melina-page-content" data-page="${match.route.pattern}"`
-                );
-
-                if (headElements.length > 0) {
-                    fullHtml = fullHtml.replace('</head>', `${headElements.join('\n')}</head>`);
-                }
-
-                if (importMapTag) {
-                    fullHtml = fullHtml.replace('</head>', `${importMapTag}</head>`);
-                }
-
-                if (clientScriptTags.length > 0) {
-                    const contentIdx = fullHtml.indexOf('id="melina-page-content"');
-                    if (contentIdx >= 0) {
-                        const closingMainIdx = fullHtml.indexOf('</main>', contentIdx);
-                        if (closingMainIdx >= 0) {
-                            fullHtml = fullHtml.slice(0, closingMainIdx)
-                                + clientScriptTags.join('\n')
-                                + fullHtml.slice(closingMainIdx);
-                        } else {
-                            fullHtml = fullHtml.replace('</body>', `${clientScriptTags.join('\n')}</body>`);
-                        }
-                    } else {
-                        fullHtml = fullHtml.replace('</body>', `${clientScriptTags.join('\n')}</body>`);
-                    }
-                }
-
-                const hmrScript = hotReload ? getHotReloadScript() : '';
-                if (hmrScript) {
-                    fullHtml = fullHtml.replace('</body>', `${hmrScript}</body>`);
-                }
-
-                return new Response(fullHtml, { headers: responseHeaders });
-            }
 
             resetHead();
             const pageHtml = await m('SSR renderPage', () => renderToString(pageTree), (e: any) => { throw e; });
@@ -569,11 +501,6 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
                     fullHtml = fullHtml.replace('</body>', `${clientScriptTags.join('\n')}</body>`);
                 }
 
-                const hmrScript = hotReload ? getHotReloadScript() : '';
-                if (hmrScript) {
-                    fullHtml = fullHtml.replace('</body>', `${hmrScript}</body>`);
-                }
-
                 return new Response(fullHtml, { headers: responseHeaders });
             }
 
@@ -582,11 +509,6 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
 
             if (clientScriptTags.length > 0) {
                 suffix = suffix.replace('</body>', `${clientScriptTags.join('\n')}</body>`);
-            }
-
-            const hmrScript = hotReload ? getHotReloadScript() : '';
-            if (hmrScript) {
-                suffix = suffix.replace('</body>', `${hmrScript}</body>`);
             }
 
             const encoder = new TextEncoder();
@@ -722,20 +644,20 @@ export interface ServeAppOptions extends AppRouterOptions {
 }
 
 export async function serve(options?: ServeAppOptions): Promise<any>;
-export async function serve(handler: Handler, options?: { port?: number; unix?: string; websocket?: any; hotReload?: boolean }): Promise<any>;
+export async function serve(handler: Handler, options?: { port?: number; unix?: string; websocket?: any }): Promise<any>;
 export async function serve(
     handlerOrOptions?: Handler | ServeAppOptions,
-    serverOptions?: { port?: number; unix?: string; websocket?: any; hotReload?: boolean }
+    serverOptions?: { port?: number; unix?: string; websocket?: any }
 ) {
     if (typeof handlerOrOptions === 'function') {
         return serveHttp(handlerOrOptions, serverOptions);
     }
 
     const options = handlerOrOptions ?? {};
-    const { port, unix, hotReload = false, ...routerOptions } = options;
+    const { port, unix, ...routerOptions } = options;
     const appDir = resolveAppDir(routerOptions.appDir);
-    const router = createAppRouter({ ...routerOptions, appDir, hotReload });
-    return serveHttp(router, { port, unix, hotReload });
+    const router = createAppRouter({ ...routerOptions, appDir });
+    return serveHttp(router, { port, unix });
 }
 
 /**
