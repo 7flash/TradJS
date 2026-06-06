@@ -11,10 +11,10 @@ import { existsSync, readFileSync } from "fs";
 import autoprefixer from "autoprefixer";
 import postcss from "postcss";
 import tailwind from "@tailwindcss/postcss";
-import { createMeasure } from "measure-fn";
+import { buildMeasure } from './measure';
 
 const isDev = process.env.NODE_ENV !== "production";
-const { measure } = createMeasure("build");
+const { measure } = buildMeasure;
 
 // ─── In-Memory Caches ──────────────────────────────────────────────────────────
 
@@ -199,39 +199,15 @@ function makeDetailedError(context: string, error: unknown): Error {
 }
 
 /**
- * measure-fn may catch the thrown error and return null.
- *
- * This wrapper stores the original error before rethrowing inside the measured fn.
- * After measure-fn returns, we rethrow the original detailed error.
+ * Build steps should fail fast. The new measure-fn throws by default,
+ * so measurement no longer changes build error semantics.
  */
 async function measured<T>(label: string, fn: () => Promise<T>): Promise<T> {
-    let capturedError: unknown = null;
-
-    const result = await measure(
-        label,
-        async () => {
-            try {
-                return await fn();
-            } catch (error) {
-                capturedError = error;
-                throw error;
-            }
-        },
-        (error: unknown) => {
-            capturedError = error;
-            return null;
-        }
-    ) as T | null;
-
-    if (capturedError) {
-        throw capturedError;
+    try {
+        return await measure(label, fn);
+    } catch (error) {
+        throw makeDetailedError(label, error);
     }
-
-    if (result === null || result === undefined) {
-        throw new Error(`[tradjs] ${label} failed without returning a result`);
-    }
-
-    return result;
 }
 
 function printBuildLogs(context: string, logs: any[] | undefined | null) {
@@ -438,13 +414,6 @@ export function getContentType(ext: string): string {
 
 // ─── Server-Only Package Detection ─────────────────────────────────────────────
 
-const KNOWN_SERVER_PACKAGES = [
-    "sqlite-zod-orm",
-    "telegram",
-    "better-sqlite3",
-    "sqlite3",
-];
-
 let _detectedServerPackages: string[] | null = null;
 
 function escapeRegExp(input: string): string {
@@ -452,20 +421,20 @@ function escapeRegExp(input: string): string {
 }
 
 /**
- * Auto-detect server-only packages by scanning node_modules for packages
- * that use `bun:*` imports. Also reads `tradjs.serverOnly`.
+ * Auto-detect server-only packages from the current app only.
+ * Reads explicit `tradjs.serverOnly` config and scans installed deps for `bun:*` imports.
  */
 function detectServerOnlyPackages(): string[] {
     if (_detectedServerPackages) return _detectedServerPackages;
 
-    const detected = new Set<string>(KNOWN_SERVER_PACKAGES);
+    const detected = new Set<string>();
 
     try {
         const pkgPath = path.resolve(process.cwd(), "package.json");
 
         if (existsSync(pkgPath)) {
             const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-            const configList = pkg?.tradjs?.serverOnly ?? pkg?.fastjs?.serverOnly ?? pkg?.lastjs?.serverOnly ?? pkg?.melina?.serverOnly;
+            const configList = pkg?.tradjs?.serverOnly;
 
             if (Array.isArray(configList)) {
                 for (const name of configList) {
@@ -512,17 +481,11 @@ function detectServerOnlyPackages(): string[] {
         }
     } catch (error) {
         console.warn(
-            `[tradjs] Failed to auto-detect server packages, using defaults:\n${formatUnknownError(error)}`
+            `[tradjs] Failed to auto-detect server packages:\n${formatUnknownError(error)}`
         );
     }
 
     _detectedServerPackages = [...detected];
-
-    if (isDev) {
-        console.warn(
-            `[tradjs] Server-only packages stubbed for browser: ${_detectedServerPackages.join(", ")}`
-        );
-    }
 
     return _detectedServerPackages;
 }
@@ -634,22 +597,32 @@ async function _buildClientScriptImpl(clientPath: string): Promise<string> {
     ];
 
     const serverOnlyPackages = detectServerOnlyPackages();
+    const matchedServerPackages = new Set<string>();
 
-    plugins.push({
-        name: "tradjs-server-stub",
+    if (serverOnlyPackages.length > 0) {
+        plugins.push({
+            name: "tradjs-server-stub",
 
-        setup(build: any) {
-            const filter = new RegExp(
-                `^(${serverOnlyPackages.map(escapeRegExp).join("|")})(/.*)?$`
-            );
+            setup(build: any) {
+                const filter = new RegExp(
+                    `^(${serverOnlyPackages.map(escapeRegExp).join("|")})(/.*)?$`
+                );
 
-            build.onResolve({ filter }, (args: any) => {
-                return { path: args.path, namespace: "server-stub" };
-            });
+                build.onResolve({ filter }, (args: any) => {
+                    const matchedPackage = serverOnlyPackages.find(
+                        pkg => args.path === pkg || args.path.startsWith(`${pkg}/`)
+                    );
 
-            build.onLoad({ filter: /.*/, namespace: "server-stub" }, () => {
-                return {
-                    contents: `
+                    if (matchedPackage) {
+                        matchedServerPackages.add(matchedPackage);
+                    }
+
+                    return { path: args.path, namespace: "server-stub" };
+                });
+
+                build.onLoad({ filter: /.*/, namespace: "server-stub" }, () => {
+                    return {
+                        contents: `
 const handler = {
     get: (_, p) => (
         p === Symbol.toPrimitive
@@ -669,11 +642,12 @@ export const TelegramClient = stub;
 export const StringSession = stub;
 export { stub as Api, stub as sessions };
 `,
-                    loader: "js",
-                };
-            });
-        },
-    });
+                        loader: "js",
+                    };
+                });
+            },
+        });
+    }
 
     if (usesReact) {
         external.push(
@@ -698,15 +672,15 @@ export { stub as Api, stub as sessions };
                     return { path: jsxDevRuntimePath };
                 });
 
-                build.onResolve({ filter: /^(tradjs|fastjs|lastjs|melina)\/client\/jsx-dev-runtime$/ }, () => {
+                build.onResolve({ filter: /^tradjs\/client\/jsx-dev-runtime$/ }, () => {
                     return { path: jsxDevRuntimePath };
                 });
 
-                build.onResolve({ filter: /^(tradjs|fastjs|lastjs|melina)\/client\/jsx-runtime$/ }, () => {
+                build.onResolve({ filter: /^tradjs\/client\/jsx-runtime$/ }, () => {
                     return { path: jsxRuntimePath };
                 });
 
-                build.onResolve({ filter: /^(tradjs|fastjs|lastjs|melina)\/client$/ }, () => {
+                build.onResolve({ filter: /^tradjs\/client$/ }, () => {
                     return { path: clientIndexPath };
                 });
             },
@@ -811,6 +785,12 @@ ${mapEntries}
             devMtimeCache.set(clientPath, { mtime: treeMtime, outputPath });
         } catch {
             // ok
+        }
+
+        if (matchedServerPackages.size > 0) {
+            console.warn(
+                `[tradjs] Server-only packages stubbed for browser: ${[...matchedServerPackages].sort().join(", ")}`
+            );
         }
     }
 
@@ -1364,4 +1344,8 @@ export async function asset(fileOrPath: BunFile | string): Promise<string> {
 export function clearCaches() {
     Object.keys(buildCache).forEach(key => delete buildCache[key]);
     Object.keys(builtAssets).forEach(key => delete builtAssets[key]);
+    devMtimeCache.clear();
+    buildInFlight.clear();
+    clientScriptsUsingReact.clear();
+    _detectedServerPackages = null;
 }

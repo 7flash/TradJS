@@ -1,6 +1,6 @@
 import { readdirSync, statSync, existsSync } from 'fs';
 import path from 'path';
-import { measureSync } from 'measure-fn';
+import { routeMeasure } from './measure';
 
 export interface Route {
     /** File path to the page component */
@@ -182,7 +182,7 @@ const IGNORED_DIR_NAMES = new Set([
     '.git',
     'dist',
     'package',
-    '.melina',
+    '.tradjs',
     '.prompts',
     '.vscode',
     '.idea',
@@ -277,7 +277,7 @@ export function discoverRoutes(appDir: string, options: DiscoverRoutesOptions = 
         return discover();
     }
 
-    return measureSync('Discover routes', discover) ?? [];
+    return routeMeasure.measureSync('Discover routes', discover);
 }
 
 /**

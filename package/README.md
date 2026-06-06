@@ -47,7 +47,7 @@ You keep the familiar folder structure and JSX ergonomics, then decide manually 
 npx tradjs init my-app
 cd my-app
 bun install
-tradjs serve --hot-reload
+tradjs serve
 ```
 
 Or from scratch with no `server.ts`:
@@ -356,7 +356,7 @@ render(<MyComponent />, document.getElementById('root'));
 
 ```bash
 npx tradjs init <project-name>   # Create new project from template
-npx tradjs serve --hot-reload    # Start dev server
+npx tradjs serve                 # Start dev server
 ```
 
 ## Showcase

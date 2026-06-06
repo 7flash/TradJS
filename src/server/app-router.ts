@@ -16,6 +16,7 @@ import { imports } from "./imports";
 import { buildScript, buildStyle, buildClientScript, clientScriptsUsingReact, builtAssets, getContentType, buildScopedStyle, buildAsset } from './build';
 import { getPrerendered, prerender as ssgPrerender } from "./ssg";
 import { serve as serveHttp } from "./serve";
+import { httpMeasure } from "./measure";
 import type { Handler, FrontendAppOptions, RenderPageOptions, AppRouterOptions } from "./types";
 
 const isDev = process.env.NODE_ENV !== "production";
@@ -150,7 +151,7 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
         component: Component,
         clientComponent,
         stylePath,
-        title = "Melina App",
+        title = "TradJS App",
         params = {},
         props = {},
         viewport = "width=device-width, initial-scale=1",
@@ -214,7 +215,7 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
       <body>
         <div id="root">${serverHtml}</div>
         <script>
-          window.__MELINA_DATA__ = ${JSON.stringify({ params, props })};
+          window.__TRADJS_DATA__ = ${JSON.stringify({ params, props })};
         </script>
         ${scriptVirtualPath ? `<script src="${scriptVirtualPath}" type="module"></script>` : ''}
       </body>
@@ -241,7 +242,7 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
 export function createAppRouter(options: AppRouterOptions = {}): Handler {
     const {
         appDir = path.join(process.cwd(), 'app'),
-        defaultTitle = 'Melina App',
+        defaultTitle = 'TradJS App',
     } = options;
 
     const routes = discoverRoutes(appDir);
@@ -314,7 +315,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
         })();
     }
 
-    return async (req: Request, m: any) => {
+    return async (req: Request) => {
         const url = new URL(req.url);
         const pathname = url.pathname;
 
@@ -335,7 +336,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
                     headers: {
                         'Content-Type': 'text/html',
                         'Cache-Control': 'public, max-age=3600',
-                        'X-Melina-SSG': '1',
+                        'X-TradJS-SSG': '1',
                     },
                 });
             }
@@ -347,13 +348,22 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
             // Each middleware can short-circuit by returning a Response.
             if (match.route.middlewares.length > 0) {
                 for (const mwPath of match.route.middlewares) {
-                    const mwResult = await m(`Middleware: ${path.basename(path.dirname(mwPath))}`, async () => {
-                        const mwModule = await import(mwPath);
-                        const mwFn = mwModule.default || mwModule.middleware;
-                        if (typeof mwFn === 'function') {
-                            return await mwFn(req, { params: match.params, route: match.route });
-                        }
-                    });
+                    const mwResult = await httpMeasure.measure(
+                        {
+                            start: () => `Middleware: ${path.basename(path.dirname(mwPath))}`,
+                            end: (result) =>
+                                result instanceof Response
+                                    ? { status: result.status }
+                                    : { result: result === undefined ? 'continue' : 'value' },
+                        },
+                        async () => {
+                            const mwModule = await import(mwPath);
+                            const mwFn = mwModule.default || mwModule.middleware;
+                            if (typeof mwFn === 'function') {
+                                return await mwFn(req, { params: match.params, route: match.route });
+                            }
+                        },
+                    );
                     // If middleware returns a Response, short-circuit
                     if (mwResult instanceof Response) return mwResult;
                 }
@@ -361,26 +371,38 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
 
             // Handle API routes
             if (match.route.type === 'api') {
-                return await m(`API: ${match.route.pattern}`, async () => {
-                    const apiModule = await import(match.route.filePath);
-                    const method = req.method.toUpperCase();
-                    const handler = apiModule[method] || apiModule.default;
+                return await httpMeasure.measure(
+                    {
+                        start: () => `API: ${match.route.pattern}`,
+                        end: (response: Response) => ({ status: response.status }),
+                    },
+                    async () => {
+                        const apiModule = await import(match.route.filePath);
+                        const method = req.method.toUpperCase();
+                        const handler = apiModule[method] || apiModule.default;
 
-                    if (!handler) {
-                        return new Response('Method Not Allowed', { status: 405 });
-                    }
+                        if (!handler) {
+                            return new Response('Method Not Allowed', { status: 405 });
+                        }
 
-                    const response = await handler(req, { params: match.params });
-                    return response instanceof Response
-                        ? response
-                        : new Response(JSON.stringify(response), {
-                            headers: { 'Content-Type': 'application/json' }
-                        });
-                });
+                        const response = await handler(req, { params: match.params });
+                        return response instanceof Response
+                            ? response
+                            : new Response(JSON.stringify(response), {
+                                headers: { 'Content-Type': 'application/json' }
+                            });
+                    },
+                );
             }
 
             // Handle Page routes
-            const pageModule = await m('Import page', () => import(match.route.filePath), (e: any) => { throw e; });
+            const pageModule = await httpMeasure.measure(
+                {
+                    start: () => 'Import page',
+                    end: () => ({ file: path.basename(match.route.filePath) }),
+                },
+                () => import(match.route.filePath),
+            );
             const PageComponent = pageModule.default || pageModule.Page;
 
             if (!PageComponent) {
@@ -427,7 +449,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
                         clientScriptUrls.push({ url: scriptPath, type: 'page' });
                     }
                 } catch (e: any) {
-                    console.error(`[Melina] Failed to build page client script: ${e.message}`);
+                    console.error(`[tradjs] Failed to build page client script: ${e.message}`);
                 }
             }
 
@@ -435,10 +457,10 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
             if (clientScriptUrls.length > 0) {
                 const paramsJson = JSON.stringify(match.params);
                 const bootstrapLines = clientScriptUrls.map(({ url, type }) => {
-                    return `  import('${url}').then(m => { if (typeof m.default === 'function') { const cleanup = m.default({ params: window.__MELINA_PARAMS__ }); if (typeof cleanup === 'function') { window.__melinaCleanups__ = window.__melinaCleanups__ || []; window.__melinaCleanups__.push({ type: '${type}', cleanup }); } } }).catch(e => console.error('[Melina] Failed to mount ${type} script:', e));`;
+                    return `  import('${url}').then(m => { if (typeof m.default === 'function') { const cleanup = m.default({ params: window.__TRADJS_PARAMS__ }); if (typeof cleanup === 'function') { window.__tradjsCleanups__ = window.__tradjsCleanups__ || []; window.__tradjsCleanups__.push({ type: '${type}', cleanup }); } } }).catch(e => console.error('[tradjs] Failed to mount ${type} script:', e));`;
                 });
                 clientScriptTags.push(
-                    `<script>window.__MELINA_PARAMS__ = ${paramsJson};</script>`,
+                    `<script>window.__TRADJS_PARAMS__ = ${paramsJson};</script>`,
                     `<script type="module">\n${bootstrapLines.join('\n')}\n</script>`
                 );
             }
@@ -464,13 +486,13 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
             };
 
             resetHead();
-            const pageHtml = await m('SSR renderPage', () => renderToString(pageTree), (e: any) => { throw e; });
+            const pageHtml = await httpMeasure.measure('SSR renderPage', () => renderToString(pageTree));
             const pageHeadElements = [...getHeadElements()];
 
             const slotTree = await wrapWithLayouts(createElement('tradjs-stream-slot', {}), match.route.layouts);
 
             resetHead();
-            const shellHtmlOnly = await m('SSR renderShell', () => renderToString(slotTree), (e: any) => { throw e; });
+            const shellHtmlOnly = await httpMeasure.measure('SSR renderShell', () => renderToString(slotTree));
             const layoutHeadElements = [...getHeadElements()];
             const headElements = [...layoutHeadElements, ...pageHeadElements];
 

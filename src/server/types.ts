@@ -1,12 +1,10 @@
 /**
- * Server-side type definitions for Melina.js
+ * Server-side type definitions for TradJS
  */
-
-import type { MeasureFn } from 'measure-fn';
 
 export type HandlerResponse = Response | AsyncGenerator<string, void, unknown> | string | object;
 
-export type Handler = (req: Request, measure: MeasureFn) => HandlerResponse | Promise<HandlerResponse>;
+export type Handler = (req: Request) => HandlerResponse | Promise<HandlerResponse>;
 
 export interface ImportConfig {
     name: string;
@@ -59,6 +57,4 @@ export interface AppRouterOptions {
     defaultTitle?: string;
     /** Path to global CSS file */
     globalCss?: string;
-    /** Enable dev-only SSE hot reload (default: false) */
-    hotReload?: boolean;
 }

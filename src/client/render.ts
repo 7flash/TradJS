@@ -332,15 +332,19 @@ function patchFiber(
             return oldFiber;
         }
 
-        // Component — skip re-execute if props haven't changed (shallow compare)
+        // Component — always re-execute by default.
+        // Components may read global/module state, so unchanged props do not prove
+        // unchanged output. Use memo(Component) for explicit opt-in bailout.
         if (typeof newVNode.type === 'function') {
-            // Shallow-compare props (excluding children which aren't used for key matching).
-            // This is the critical optimization for keyed reconciliation:
-            // matched items have identical props → skip component re-execution entirely.
-            if (shallowPropsEqual(oldVNode.props, newVNode.props)) {
+            const compare = (newVNode.type as any).__tradjsMemoCompare as
+                | ((oldProps: any, newProps: any) => boolean)
+                | undefined;
+
+            if (compare && compare(oldVNode.props, newVNode.props)) {
                 oldFiber.vnode = newVNode;
                 return oldFiber;
             }
+
             const result = (newVNode.type as Component)(newVNode.props);
             const resultArr = result ? [result] : [];
             const componentParent = oldFiber.node || parentNode;
@@ -530,9 +534,16 @@ function getNextSibling(fiber: Fiber, parentNode: Node): Node | null {
 
 // ─── Navigation ────────────────────────────────────────────────────────────────
 
-export async function navigate(href: string, _skipPushState = false): Promise<void> {
+export interface NavigateOptions {
+    replace?: boolean;
+    scroll?: boolean;
+    state?: unknown;
+}
+
+export async function navigate(href: string, options: NavigateOptions | boolean = {}): Promise<void> {
     if (typeof window === 'undefined') return;
     try {
+        const opts: NavigateOptions = typeof options === 'boolean' ? { replace: options } : options;
         const resolvedHref = new URL(href, window.location.href).toString();
         const response = await fetch(resolvedHref);
         const html = await response.text();
@@ -546,12 +557,14 @@ export async function navigate(href: string, _skipPushState = false): Promise<vo
         const fragment = document.createDocumentFragment();
         while (newDoc.body.firstChild) fragment.appendChild(document.adoptNode(newDoc.body.firstChild));
 
-        if (!_skipPushState) {
-            window.history.pushState({}, '', resolvedHref);
+        if (opts.replace) {
+            window.history.replaceState(opts.state ?? {}, '', resolvedHref);
+        } else {
+            window.history.pushState(opts.state ?? {}, '', resolvedHref);
         }
         const update = () => {
             document.body.replaceChildren(fragment);
-            window.scrollTo(0, 0);
+            if (opts.scroll !== false) window.scrollTo(0, 0);
         };
 
         if (document.startViewTransition) {
@@ -568,8 +581,8 @@ export async function navigate(href: string, _skipPushState = false): Promise<vo
 }
 
 function runPageCleanups(): void {
-    const cleanups = Array.isArray((window as any).__melinaCleanups__)
-        ? (window as any).__melinaCleanups__
+    const cleanups = Array.isArray((window as any).__tradjsCleanups__)
+        ? (window as any).__tradjsCleanups__
         : [];
 
     for (const entry of cleanups) {
@@ -581,7 +594,7 @@ function runPageCleanups(): void {
         }
     }
 
-    (window as any).__melinaCleanups__ = [];
+    (window as any).__tradjsCleanups__ = [];
 }
 
 function syncHead(newDoc: Document): void {
@@ -620,6 +633,27 @@ function reactivateScripts(root: ParentNode): void {
         if (oldScript.textContent) newScript.textContent = oldScript.textContent;
         oldScript.parentNode?.replaceChild(newScript, oldScript);
     }
+}
+
+
+// ─── Explicit Component Memoization ────────────────────────────────────────────
+
+export function memo<P extends Record<string, any>>(
+    Component: (props: P) => any,
+    compare: (oldProps: P, newProps: P) => boolean = shallowPropsEqual,
+) {
+    function MemoComponent(props: P) {
+        return Component(props);
+    }
+
+    Object.defineProperty(MemoComponent, 'name', {
+        value: Component.name ? `Memo(${Component.name})` : 'MemoComponent',
+        configurable: true,
+    });
+
+    (MemoComponent as any).__tradjsMemoCompare = compare;
+
+    return MemoComponent as typeof Component;
 }
 
 export interface LinkProps extends Props { href: string; }
@@ -667,8 +701,8 @@ export const jsxDEV = jsx;
 // Without this guard, each bundle registers its own click interceptor,
 // causing duplicate fetches on every navigation.
 
-if (typeof window !== 'undefined' && !(window as any).__melinaNavInit__) {
-    (window as any).__melinaNavInit__ = true;
+if (typeof window !== 'undefined' && !(window as any).__tradjsNavInit__) {
+    (window as any).__tradjsNavInit__ = true;
 
     document.addEventListener('click', (e) => {
         const link = (e.target as Element).closest('a[href]') as HTMLAnchorElement;
@@ -680,6 +714,6 @@ if (typeof window !== 'undefined' && !(window as any).__melinaNavInit__) {
     });
 
     window.addEventListener('popstate', () => {
-        navigate(window.location.href, true);
+        navigate(window.location.href, { replace: true, scroll: false });
     });
 }

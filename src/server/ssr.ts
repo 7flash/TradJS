@@ -1,5 +1,5 @@
 /**
-	 * melina — Server-Side Rendering
+	 * tradjs — Server-Side Rendering
 	 *
 	 * String-based HTML renderer for VNodes. This module has ZERO DOM dependencies
 	 * and runs exclusively on the server. It is never bundled into client scripts.
@@ -59,8 +59,10 @@ export function renderToString(vnode: VNode | Child): string {
             return '';
         }
         const result = (type as Component)(props || {});
-        const html = await renderToStringAsync(result);
-        return html;
+        if (result instanceof Promise) {
+            throw new Error('renderToString() does not support async components; use renderToStringAsync() instead.');
+        }
+        return renderToString(result);
     }
 
     // HTML Element

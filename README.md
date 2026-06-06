@@ -1,520 +1,603 @@
 # TradJS 🦊
 
-**Bun-native web framework — server-rendered JSX + lightweight client runtime**
+**Bun-first web framework with file-system routing, SSR, full-body client navigation, API routes, scoped CSS, SSG, middleware, error boundaries, and a tiny JSX renderer.**
 
-[![npm version](https://img.shields.io/npm/v/tradjs)](https://www.npmjs.com/package/tradjs)
-[![Tests](https://github.com/7flash/melina.js/actions/workflows/test.yml/badge.svg)](https://github.com/7flash/melina.js/actions/workflows/test.yml)
-[![Bun](https://img.shields.io/badge/runtime-Bun-f9f1e1)](https://bun.sh)
-
-TradJS is a Bun-native web framework inspired by Next.js's file-based routing, nested layouts, and server-rendered JSX model, but without requiring React as the client runtime.
-
-You keep the familiar folder structure and JSX ergonomics, then decide manually what should re-render on the client and when. Mount scripts stay small, explicit, and flexible, closer to traditional JavaScript control than declarative React.
-
-```
-  Server (Bun)                 Browser
-┌──────────────┐          ┌──────────────┐
-│  page.tsx    │──HTML──▶ │  Static DOM  │
-│  layout.tsx  │          │              │
-│  api/route.ts│          │  .client.tsx │
-│  middleware  │          │  mount()     │
-│  SSG cache   │          │  VDOM render │
-└──────────────┘          └──────────────┘
-```
-
-## Features
-
-- **File-based routing** — Next.js-inspired App Router convention (`app/page.tsx` → `/`)
-- **Nested layouts** — `layout.tsx` at any level, composed automatically
-- **Mount scripts** — `page.client.tsx` adds interactivity without shipping React
-- **API routes** — `app/api/*/route.ts` with `GET`, `POST`, etc.
-- **Dynamic routes** — `app/post/[id]/page.tsx` → `/post/:id`
-- **SSG** — `export const ssg = true` to pre-render at startup, serve from memory
-- **`<Head>` component** — Declarative `<title>`, `<meta>` per page during SSR
-- **Error boundaries** — `error.tsx` catches render errors with layout chrome
-- **Middleware** — `middleware.ts` at any route level, runs root→leaf
-- **Scoped CSS** — `page.css` or `style.css` scoped to route segments
-- **Tailwind CSS v4** — Built-in PostCSS + `@tailwindcss/postcss` support
-- **Streaming** — Return `AsyncGenerator` from API routes for SSE
-- **In-memory builds** — No `dist/` folder — assets built and served from RAM
-- **Import maps** — Browser-native module resolution for client dependencies
-- **Pluggable reconcilers** — Keyed, sequential, or replace strategies for VDOM diffing
-- **Hot reload** — Dev-only SSE-based live reload. Watches client script dep trees, reloads browser on save (v2.5.0)
-- **Auto server-only stubbing** — Scans `node_modules` for `bun:*` imports and auto-stubs them for browser builds
-- **Build error reporting** — Surfaces Bun build errors/warnings with file:line:column positions
-- **Observability** — All operations instrumented with [measure-fn](https://github.com/7flash/measure-fn)
-
-## Quick Start
-
-```bash
-# Create a new project
+```sh
 npx tradjs init my-app
 cd my-app
-bun install
-tradjs serve --hot-reload
+bun run dev
 ```
 
-Or from scratch with no `server.ts`:
+Open:
 
-```ts
-import { serve } from 'tradjs';
-
-await serve({
-  port: 3000,
-  defaultTitle: 'My App',
-  // hotReload: true, // opt-in in dev
-});
+```txt
+http://localhost:3000
 ```
 
-## Project Structure
+## Runtime support
 
+TradJS is currently **Bun-first**.
+
+The full framework runtime expects Bun today:
+
+- dev server uses Bun APIs
+- build pipeline uses Bun bundling/runtime behavior
+- scaffolded apps are Bun projects
+
+Some internals are portable and adapter-ready:
+
+- client renderer
+- SSR string renderer
+- route matcher
+- most filesystem discovery logic
+- `measure-fn` instrumentation
+
+Node.js support should be implemented as a runtime adapter, not by scattering Bun/Node conditionals through the framework.
+
+Recommended future shape:
+
+```txt
+src/runtime/types.ts
+src/runtime/bun.ts
+src/runtime/node.ts
+src/runtime/index.ts
 ```
-my-app/
-├── app/
-│   ├── layout.tsx              # Root layout (wraps all pages)
-│   ├── layout.client.tsx       # Persistent client JS (survives navigation)
-│   ├── globals.css             # Global styles (Tailwind or plain CSS)
-│   ├── page.tsx                # Home page (/)
-│   ├── page.client.tsx         # Home page mount script
-│   ├── page.css                # Scoped CSS for home page
-│   ├── middleware.ts           # Root middleware (runs on every request)
-│   ├── error.tsx               # Error boundary
-│   ├── about/
-│   │   └── page.tsx            # /about
-│   ├── post/[id]/
-│   │   └── page.tsx            # /post/:id (dynamic route)
-│   └── api/
-│       └── messages/
-│           └── route.ts        # API: /api/messages
-└── package.json
+
+Until that lands, document the full-stack framework as Bun runtime required.
+
+## Why TradJS?
+
+- file-system routing from `app/`
+- server-rendered pages by default
+- client scripts only where you add `page.client.tsx` or `layout.client.tsx`
+- API route handlers with `GET`, `POST`, etc.
+- plain JSX, no React runtime required
+- page CSS that can be scoped automatically
+- full-body navigation with cleanup and script remounting
+- predictable reconciliation: components re-run by default; `memo()` is opt-in
+- Bun-first CLI, dev server, and build pipeline
+
+## CLI
+
+```sh
+npx tradjs init <project-name>
+npx tradjs init .
+npx tradjs serve
+npx tradjs build
 ```
 
-## Architecture
+### `tradjs serve`
 
-### Server Pages
+```sh
+npx tradjs serve
+npx tradjs serve 3000
+npx tradjs serve --appdir ./app
+npx tradjs serve --unix /tmp/tradjs.sock
+```
 
-Pages export a default function that returns JSX. These run **only on the server** — you can access databases, read files, call APIs directly:
+### `tradjs build`
+
+```sh
+npx tradjs build
+npx tradjs build --outdir ./out
+npx tradjs build --appdir ./app
+npx tradjs build --css app/globals.css
+npx tradjs build --entry src/a.ts --entry src/b.tsx --outdir ./dist
+```
+
+## Project structure
+
+```txt
+app/
+  layout.tsx
+  page.tsx
+  page.client.tsx
+  globals.css
+
+  counter/
+    page.tsx
+    page.client.tsx
+
+  api/
+    data/
+      route.ts
+
+  features/
+    middleware/
+      middleware.ts
+      page.tsx
+
+    error-crash/
+      page.tsx
+      error.tsx
+```
+
+## Pages
 
 ```tsx
 // app/page.tsx
-export default function HomePage() {
-  const posts = db.query('SELECT * FROM posts LIMIT 10');
 
+export default function HomePage() {
   return (
     <main>
-      <h1>Latest Posts</h1>
-      {posts.map(post => (
-        <article key={post.id}>
-          <h2>{post.title}</h2>
-          <p>{post.excerpt}</p>
-        </article>
-      ))}
+      <h1>Hello TradJS</h1>
+      <p>This page is server-rendered.</p>
+      <div id="counter-root" />
     </main>
   );
 }
 ```
 
-### Mount Scripts (Client Interactivity)
+| File | Route |
+|---|---|
+| `app/page.tsx` | `/` |
+| `app/about/page.tsx` | `/about` |
+| `app/items/[id]/page.tsx` | `/items/:id` |
+| `app/api/data/route.ts` | `/api/data` |
 
-A `page.client.tsx` file adds interactivity to server-rendered HTML. Export a default `mount()` function — it receives the DOM after SSR:
-
-```tsx
-// app/counter/page.client.tsx
-import { render } from 'tradjs/client';
-
-function Counter({ count, onIncrement }: { count: number; onIncrement: () => void }) {
-  return (
-    <div>
-      <span>{count}</span>
-      <button onClick={onIncrement}>+1</button>
-    </div>
-  );
-}
-
-export default function mount() {
-  const root = document.getElementById('counter-root');
-  if (!root) return;
-
-  let count = 0;
-  const update = () => {
-    render(<Counter count={count} onIncrement={() => { count++; update(); }} />, root);
-  };
-  update();
-}
-```
-
-**Key design decisions:**
-- **No hooks** — Logic is explicit, not hidden behind magic closures
-- **No framework lock-in** — `render(vnode, container)` is the entire API
-- **Works with XState** — Mount scripts are the perfect place for state machines
-
-### Layouts
-
-Layouts wrap pages and compose automatically from root to leaf:
+## Layouts
 
 ```tsx
 // app/layout.tsx
+
 export default function RootLayout({ children }: { children: any }) {
   return (
     <html lang="en">
       <head>
         <meta charSet="utf-8" />
-        <title>My App</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>TradJS App</title>
       </head>
       <body>
-        <nav><a href="/">Home</a></nav>
-        <main>{children}</main>
+        {children}
       </body>
     </html>
   );
 }
 ```
 
-`layout.client.tsx` is a **persistent** mount script — it survives page navigations, ideal for global UI like nav highlights or notification systems.
+Nested route segments can define their own layouts.
 
-### `<Head>` Component
+## Client scripts
 
-Declarative per-page head management during SSR:
+Add `page.client.tsx` next to a page to mount browser behavior.
+
+```tsx
+// app/counter/page.tsx
+
+export default function CounterPage() {
+  return (
+    <main>
+      <h1>Counter</h1>
+      <div id="counter-root" />
+    </main>
+  );
+}
+```
+
+```tsx
+// app/counter/page.client.tsx
+
+import { render } from 'tradjs/client';
+
+let count = 0;
+
+function Counter() {
+  return (
+    <button
+      onClick={() => {
+        count++;
+        update();
+      }}
+    >
+      Count: {count}
+    </button>
+  );
+}
+
+function update() {
+  const root = document.getElementById('counter-root');
+  if (root) render(<Counter />, root);
+}
+
+export default function mount() {
+  update();
+
+  return () => {
+    const root = document.getElementById('counter-root');
+    if (root) render(null, root);
+  };
+}
+```
+
+The default export is a mount function. If it returns a function, TradJS calls it before the next navigation replaces the page.
+
+## Navigation philosophy
+
+TradJS navigation is **document-like**, not island-like.
+
+On client navigation, TradJS:
+
+1. fetches the next page HTML
+2. runs current page/layout cleanup functions
+3. syncs `<head>` and root attributes
+4. replaces the entire `<body>`
+5. reactivates scripts in the new body
+6. lets new layout/page scripts mount fresh behavior
+
+This keeps navigation predictable. There is no hidden partial hydration system and no island lifecycle abstraction.
+
+If a small region needs fresh data, use a JSON API route and update that region from your client script.
+
+If something should persist across pages, persist its state explicitly with browser primitives:
+
+- `sessionStorage`
+- `localStorage`
+- IndexedDB
+- URL/search params
+- cookies
+- server session
+
+For smooth visual persistence across full-body transitions, use the Browser View Transition API with stable `view-transition-name` values.
+
+```css
+.player-shell {
+  view-transition-name: persistent-player;
+}
+```
+
+```tsx
+// layout.tsx
+
+export default function Layout({ children }: { children: any }) {
+  return (
+    <html>
+      <body>
+        <div className="player-shell" id="player-root" />
+        {children}
+      </body>
+    </html>
+  );
+}
+```
+
+State still belongs in explicit storage:
+
+```ts
+// layout.client.tsx
+
+const key = 'tradjs:player-state';
+
+export default function mount() {
+  const root = document.getElementById('player-root');
+  if (!root) return;
+
+  const state = JSON.parse(sessionStorage.getItem(key) || '{"playing":false}');
+
+  root.textContent = state.playing ? 'Playing' : 'Paused';
+
+  return () => {
+    sessionStorage.setItem(key, JSON.stringify(state));
+  };
+}
+```
+
+This is the intended model: full page replacement, explicit persistence when needed.
+
+## JSX runtime
+
+```json
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "tradjs/client",
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true
+  }
+}
+```
+
+Use React-style event props:
+
+```tsx
+<button onClick={() => console.log('clicked')}>Click</button>
+<input onInput={(event) => console.log(event.currentTarget.value)} />
+<form onSubmit={(event) => event.preventDefault()} />
+```
+
+Server rendering skips event props, so handlers do not become HTML attributes.
+
+## Client renderer
+
+```tsx
+import { render, h, memo, Link, navigate } from 'tradjs/client';
+
+render(<App />, document.getElementById('root')!);
+render(null, root);
+```
+
+Use `h()` manually if preferred:
+
+```tsx
+render(h('button', { onClick: () => alert('hi') }, 'Click'), root);
+```
+
+## Re-rendering and `memo()`
+
+Function components re-run by default whenever you call `render()`.
+
+```tsx
+let mode = 'close';
+
+function App() {
+  return mode === 'close'
+    ? <button data-click="panel-close">Close panel</button>
+    : <button data-tab="buildings">Buildings tab</button>;
+}
+
+render(<App />, root);
+
+mode = 'tab';
+render(<App />, root);
+```
+
+TradJS executes `App` again, produces a new vnode tree, and reconciles it against the previous tree. DOM nodes are reused where possible and replaced only when needed.
+
+Use `memo()` only for explicit props-based bailout:
+
+```tsx
+const Card = memo(function Card({ title }: { title: string }) {
+  return <article>{title}</article>;
+});
+```
+
+This matches the React mental model: no implicit function-component memoization.
+
+## Links
+
+```tsx
+import { Link, navigate } from 'tradjs/client';
+
+<Link href="/counter">Counter</Link>
+
+navigate('/counter');
+navigate('/counter', { replace: true, scroll: false });
+```
+
+Normal anchors are intercepted when safe:
+
+- same origin
+- no `target`
+- no `download`
+- no modifier key
+- not marked with `data-no-intercept`
+
+External links and special clicks use the browser default behavior.
+
+## API routes
+
+```ts
+// app/api/data/route.ts
+
+export function GET(req: Request) {
+  return Response.json({ ok: true });
+}
+
+export async function POST(req: Request) {
+  const body = await req.json().catch(() => ({}));
+  return Response.json({ received: body });
+}
+```
+
+Supported exports:
+
+```ts
+export function GET(req: Request) {}
+export function POST(req: Request) {}
+export function PUT(req: Request) {}
+export function PATCH(req: Request) {}
+export function DELETE(req: Request) {}
+```
+
+## Middleware
+
+```ts
+// app/admin/middleware.ts
+
+export default async function middleware(req: Request): Promise<Response | void> {
+  const url = new URL(req.url);
+
+  if (!url.searchParams.has('token')) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+}
+```
+
+Return `void` to continue. Return a `Response` to short-circuit.
+
+## Error boundaries
+
+```tsx
+// app/features/error-crash/error.tsx
+
+export default function ErrorBoundary({
+  error,
+  pathname,
+}: {
+  error: { message?: string; stack?: string };
+  pathname: string;
+}) {
+  return (
+    <main>
+      <h1>Something went wrong</h1>
+      <p>{error.message || 'Unknown error'}</p>
+      <a href={pathname}>Try again</a>
+    </main>
+  );
+}
+```
+
+## Head tags
 
 ```tsx
 import { Head } from 'tradjs/web';
 
 export default function AboutPage() {
   return (
-    <>
+    <main>
       <Head>
-        <title>About Us — My App</title>
-        <meta name="description" content="Learn about our team" />
-        <link rel="canonical" href="https://example.com/about" />
+        <title>About | TradJS</title>
+        <meta name="description" content="About this app" />
       </Head>
-      <main><h1>About Us</h1></main>
-    </>
+
+      <h1>About</h1>
+    </main>
   );
 }
 ```
 
-### API Routes
+## Static site generation
 
-Export HTTP method handlers:
+```tsx
+export const ssg = true;
+
+export default function Page() {
+  return <main>Static page</main>;
+}
+```
+
+With revalidation metadata:
+
+```tsx
+export const ssg = {
+  revalidate: 60,
+};
+```
+
+## Scoped CSS
+
+```txt
+app/features/scoped-css/
+  page.tsx
+  page.css
+```
+
+```css
+.scoped-card {
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 12px;
+  padding: 16px;
+}
+```
+
+TradJS scopes `page.css` to the route.
+
+## CSS Modules
+
+```css
+/* nav.module.css */
+.nav {
+  display: flex;
+}
+```
+
+```tsx
+import styles from './nav.module.css';
+
+export default function Nav() {
+  return <nav className={styles.nav}>Nav</nav>;
+}
+```
+
+## Streaming responses
 
 ```ts
-// app/api/messages/route.ts
-export async function GET(req: Request) {
-  const messages = await db.getMessages();
-  return Response.json(messages);
-}
+export function GET(req: Request) {
+  const stream = new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+      controller.enqueue(encoder.encode('hello'));
+      controller.close();
+    },
+  });
 
-export async function POST(req: Request) {
-  const body = await req.json();
-  await db.createMessage(body);
+  return new Response(stream, {
+    headers: { 'Content-Type': 'text/plain' },
+  });
+}
+```
+
+## Observability
+
+TradJS uses scoped `measure-fn` internally.
+
+```txt
+[http:a] ... GET /users req_abc123
+[http:a-a] ... Import page
+[http:a-b] ... SSR renderPage
+[http:a] ··········· 12.51ms → {"status":200}
+```
+
+Handlers stay clean:
+
+```ts
+export function GET(req: Request) {
   return Response.json({ ok: true });
 }
 ```
 
-**Streaming** — Return an `AsyncGenerator` for Server-Sent Events:
+No measurement function is passed into route handlers.
+
+## Public API
+
+### `tradjs/client`
 
 ```ts
-export async function* GET(req: Request) {
-  for (let i = 0; i < 10; i++) {
-    yield `data: ${JSON.stringify({ count: i })}\n\n`;
-    await new Promise(r => setTimeout(r, 1000));
-  }
-}
+import {
+  render,
+  createElement,
+  h,
+  memo,
+  Link,
+  navigate,
+  Fragment,
+} from 'tradjs/client';
 ```
 
-### SSG (Static Site Generation)
-
-Opt in per page — pre-render at startup, serve from memory:
-
-```tsx
-// Pre-render once, serve forever
-export const ssg = true;
-
-// Or with TTL (re-render after expiry)
-export const ssg = { revalidate: 60 }; // seconds
-
-export default function PricingPage() {
-  return <main><h1>Pricing</h1></main>;
-}
-```
-
-### Middleware
-
-`middleware.ts` files run before the page renders, root→leaf:
+### `tradjs/web`
 
 ```ts
-// app/middleware.ts
-export default async function middleware(req: Request) {
-  const token = req.headers.get('authorization');
-  if (!token) {
-    return new Response('Unauthorized', { status: 401 });
-  }
-  // Return nothing to continue to the page
-}
+import {
+  Head,
+  serve,
+  start,
+} from 'tradjs/web';
 ```
 
-### Error Boundaries
-
-`error.tsx` catches render errors and displays them with full layout chrome:
-
-```tsx
-// app/error.tsx
-export default function ErrorPage({ error }: { error: { message: string } }) {
-  return (
-    <div>
-      <h1>Something went wrong</h1>
-      <p>{error.message}</p>
-    </div>
-  );
-}
-```
-
-### Dynamic Routes
-
-```
-app/post/[id]/page.tsx      → /post/:id
-app/user/[userId]/page.tsx  → /user/:userId
-```
-
-```tsx
-export default function PostPage({ params }: { params: { id: string } }) {
-  return <h1>Post #{params.id}</h1>;
-}
-```
-
-### Scoped CSS
-
-Add `page.css` or `style.css` alongside any page — it's automatically injected only for that route:
-
-```css
-/* app/dashboard/page.css */
-.metric-card {
-  background: linear-gradient(135deg, #1a1a2e, #16213e);
-  border-radius: 12px;
-  padding: 24px;
-}
-```
-
-## Styling
-
-Built-in Tailwind CSS v4 + PostCSS. Add `globals.css` in the app directory:
-
-```css
-@import "tailwindcss";
-
-@theme {
-  --color-primary: #0a0a0f;
-  --color-accent: #6366f1;
-}
-```
-
-TradJS auto-discovers `globals.css`, `global.css`, or `app.css`.
-
-## API Reference
-
-### `serve(options)`
-
-High-level convention-based entry point:
+### `tradjs/server`
 
 ```ts
-import { serve } from 'tradjs';
-
-await serve({
-  port: 3000,
-  defaultTitle: 'My App',
-});
+import {
+  renderToString,
+  renderToStringAsync,
+} from 'tradjs/server';
 ```
 
-`serve()` looks for `./app` first. If there is no `app/` directory, it falls back to route files in the current directory such as `page.tsx`, `layout.tsx`, and `api/`.
+## Design notes
 
-### `start(options)`
+TradJS intentionally keeps the model small:
 
-Compatibility alias for `serve(options)`.
-
-### `serve(handler, options)` + `createAppRouter(options)`
-
-Lower-level API for custom setups:
-
-```ts
-import { serve, createAppRouter } from 'tradjs';
-
-const handler = createAppRouter({
-  appDir: './app',
-  defaultTitle: 'My App',
-  globalCss: './app/globals.css',
-  hotReload: true,
-});
-
-serve(handler, { port: 3000, hotReload: true });
-```
-
-### Client: `render(vnode, container)`
-
-The entire client API:
-
-```ts
-import { render, createElement } from 'tradjs/client';
-
-render(<MyComponent />, document.getElementById('root'));
-```
-
-### CLI
-
-```bash
-npx tradjs init <project-name>   # Create new project from template
-npx tradjs serve --hot-reload    # Start dev server
-```
-
-## Showcase
-
-Run the built-in showcase to see every feature in action:
-
-```bash
-git clone https://github.com/7flash/melina.js.git
-cd melina.js
-bun install
-bun run examples/showcase/server.ts
-# → http://localhost:3000
-```
-
-The showcase includes:
-- SSR demo with live timestamps
-- Counter with VDOM rendering
-- XState state machine integration
-- Reconciler strategy comparison and benchmarks
-- SSG benchmark (SSR vs Cached SSR vs SSG response times)
-- Error boundaries, middleware, scoped CSS, `<Head>` component
-- Streaming API with animated progress
-- Server throughput stress test
-
----
-
-## For Contributors
-
-### Design Philosophy
-
-TradJS is intentionally small. We don't add features unless they solve a real problem that the existing primitives can't handle. Two features we've explicitly decided against:
-
-#### Why no Cached SSR
-
-The comparison table on the SSG page shows three strategies: SSR, Cached SSR, and SSG. **Cached SSR does not exist as a framework feature** — and we don't plan to add it.
-
-The pitch for Cached SSR is: "Render on the first request, cache the HTML, serve the cache for subsequent requests until TTL expires." But SSG with revalidation already does this — better:
-
-```tsx
-// This is all you need. No Cached SSR required.
-export const ssg = { revalidate: 60 }; // re-render every 60 seconds
-
-export default function PricingPage() {
-    const prices = db.getPrices(); // fresh data on each revalidation
-    return <main><PriceTable prices={prices} /></main>;
-}
-```
-
-Here's the concrete comparison:
-
-| | Cached SSR | SSG with `revalidate` |
-|---|---|---|
-| When cached | After first visitor requests | At startup (before any visitor) |
-| First visitor | **Pays full render cost** | **Instant response** |
-| Storage | JS string in memory (GC pressure) | ArrayBuffer (zero-copy, no GC) |
-| Cache refresh | Next request after TTL expires triggers re-render | Background revalidation on timer |
-| Invalidation | TTL only | TTL via `revalidate`, or manual via `clearSSGCache()` |
-| Cold start | Slow (uncached) | Fast (pre-rendered) |
-
-The critical difference: **Cached SSR penalizes the first visitor** with a full server render. SSG pre-renders at startup, so every visitor — including the first — gets an instant response. The `revalidate` option handles staleness automatically, and `clearSSGCache()` handles on-demand invalidation (e.g., after a webhook from your CMS).
-
-If you need truly dynamic, per-request data (user-specific content, authenticated pages), use SSR. If you want caching, use SSG with `revalidate`. There's no use case where "SSR + cache the response" beats "SSG + periodic revalidation" — SSG is strictly better because it eliminates the cold-start penalty entirely.
-
-#### Hot Reload (v2.5.0)
-
-In dev mode, TradJS watches your client script dependency trees and auto-reloads the browser on save:
-
-- `hot-reload.ts` uses `fs.watch()` on directories containing client scripts and their imports
-- When a file changes, an SSE event is sent to the browser via `/__melina_hmr`
-- A reconnecting `EventSource` client in the page triggers `window.location.reload()`
-- 150ms debounce handles editors that write multiple times per save
-- Dep trees are walked using `Bun.Transpiler.scanImports()` — only local imports are followed
-- Completely no-op in production
-
-Apps can also configure server-only packages via `package.json`:
-
-```json
-{
-  "tradjs": {
-    "serverOnly": ["my-db-adapter", "internal-auth-lib"]
-  }
-}
-```
-
-These packages will be stubbed with a `Proxy` in browser builds, preventing `bun:*` import errors.
-
-### Project Structure
-
-```
-src/
-├── server/
-│   ├── app-router.ts      # Route matching, SSR pipeline, error boundaries
-│   ├── build.ts            # Asset build pipeline (JS, CSS, static files)
-│   ├── serve.ts            # HTTP server with measure-fn observability
-│   ├── router.ts           # File-based route discovery
-│   ├── ssg.ts              # Static site generation (pre-render + memory serve)
-│   ├── ssr.ts              # renderToString (VNode → HTML)
-│   ├── head.ts             # <Head> component (side-channel collection)
-│   ├── imports.ts          # Import map generation
-│   ├── hot-reload.ts       # Dev-only SSE hot reload + file watcher
-│   └── types.ts            # Shared types
-├── client/
-│   ├── render.ts           # VDOM renderer + Fiber reconciler (~2KB)
-│   ├── reconcilers/        # Pluggable diffing strategies
-│   │   ├── keyed.ts        # O(n log n) key-based with LIS
-│   │   ├── sequential.ts   # O(n) index-based
-│   │   └── replace.ts      # Full replace (baseline)
-│   ├── jsx-runtime.ts      # JSX transform for client bundles
-│   ├── jsx-dom.ts          # JSX-to-real-DOM for mount scripts
-│   └── types.ts            # VNode, Component, Props types
-└── web.ts                  # Main entry point
-```
-
-### Observability
-
-Every operation is instrumented with [measure-fn](https://github.com/7flash/measure-fn):
-
-```
-[a] ✓ Discover routes 8.10ms → 17 routes
-[b] ... GET http://localhost:3000/
-[b-a] ... Middleware: app
-[b-a] ✓ Middleware: app 0.12ms
-[b-b] ... Import page
-[b-b] ✓ Import page 0.04ms
-[b-c] ... SSR renderToString
-[b-c] ✓ SSR renderToString 0.31ms
-[build:d] ... Style: globals.css
-[build:d] ✓ Style: globals.css 0.10ms
-[b] ✓ GET http://localhost:3000/ 2.14ms
-```
-
-### Running Tests
-
-```bash
-bun test
-```
+- server pages return JSX
+- API routes return `Response`
+- client interactivity is explicit through scripts
+- navigation replaces the full body
+- persistence is explicit through browser/server storage
+- memoization is explicit through `memo()`
+- routing comes from files
+- CSS can be global, scoped, or modular
 
 ## License
 
-MIT © [7flash](https://github.com/7flash) Import page 0.04ms
-[b-c] ... SSR renderToString
-[b-c] ✓ SSR renderToString 0.31ms
-[build:d] ... Style: globals.css
-[build:d] ✓ Style: globals.css 0.10ms
-[b] ✓ GET http://localhost:3000/ 2.14ms
-```
-
-### Running Tests
-
-```bash
-bun test
-```
-
-## License
-
-MIT © [7flash](https://github.com/7flash)
+MIT

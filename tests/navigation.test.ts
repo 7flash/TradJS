@@ -3,6 +3,7 @@ import { JSDOM } from 'jsdom';
 
 describe('client navigation', () => {
     let dom: JSDOM;
+
     const originalGlobals = {
         window: (globalThis as any).window,
         document: (globalThis as any).document,
@@ -14,13 +15,20 @@ describe('client navigation', () => {
         Node: (globalThis as any).Node,
         Event: (globalThis as any).Event,
         MouseEvent: (globalThis as any).MouseEvent,
+        History: (globalThis as any).History,
+        location: (globalThis as any).location,
+        history: (globalThis as any).history,
         fetch: (globalThis as any).fetch,
     };
 
     beforeEach(() => {
         dom = new JSDOM(
             '<!DOCTYPE html><html><head><title>Before</title><meta name="description" content="before"></head><body class="before"><main>Old</main></body></html>',
-            { url: 'http://localhost/start', runScripts: 'dangerously' }
+            {
+                url: 'http://localhost/start',
+                runScripts: 'dangerously',
+                pretendToBeVisual: true,
+            },
         );
 
         Object.assign(globalThis, {
@@ -34,39 +42,57 @@ describe('client navigation', () => {
             Node: dom.window.Node,
             Event: dom.window.Event,
             MouseEvent: dom.window.MouseEvent,
+            History: dom.window.History,
+            location: dom.window.location,
+            history: dom.window.history,
         });
+
         (dom.window as any).scrollTo = () => {};
+        (globalThis as any).scrollTo = () => {};
 
         (globalThis as any).fetch = async () => new Response(
             '<!DOCTYPE html><html><head><title>After</title><meta name="description" content="after"></head><body class="after"><section id="new-page">Next</section><script>window.__navScriptRuns = (window.__navScriptRuns || 0) + 1;</script></body></html>',
-            { headers: { 'Content-Type': 'text/html' } }
+            {
+                status: 200,
+                headers: {
+                    'Content-Type': 'text/html',
+                },
+            },
         );
     });
 
     afterEach(() => {
         for (const [key, value] of Object.entries(originalGlobals)) {
-            if (value === undefined) delete (globalThis as any)[key];
-            else (globalThis as any)[key] = value;
+            if (value === undefined) {
+                delete (globalThis as any)[key];
+            } else {
+                (globalThis as any)[key] = value;
+            }
         }
     });
 
     test('navigate replaces body, runs cleanups, and reactivates page scripts', async () => {
         const cleanupCalls: string[] = [];
-        (window as any).__melinaCleanups__ = [
+
+        (window as any).__tradjsCleanups__ = [
             { cleanup: () => cleanupCalls.push('cleanup-ran') },
         ];
 
         const { navigate } = await import('../src/client/render');
+
         await navigate('/next?x=1');
 
         expect(cleanupCalls).toEqual(['cleanup-ran']);
-        expect(document.title).toBe('After');
         expect(document.body.className).toBe('after');
+        expect(document.querySelector('main')).toBeNull();
         expect(document.querySelector('#new-page')?.textContent).toBe('Next');
-        expect(window.location.pathname).toBe('/next');
-        expect(window.location.search).toBe('?x=1');
+
+        expect(document.title).toBe('After');
         expect(document.querySelector('meta[name="description"]')?.getAttribute('content')).toBe('after');
-        expect(document.body.querySelectorAll('script').length).toBe(1);
-        expect((window as any).__melinaCleanups__).toEqual([]);
+
+        expect((window as any).__navScriptRuns).toBe(1);
+
+        expect(location.pathname).toBe('/next');
+        expect(location.search).toBe('?x=1');
     });
 });

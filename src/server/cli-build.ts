@@ -1,25 +1,25 @@
 /**
- * melina build — Build assets to disk
+ * tradjs build — Build assets to disk
  * 
  * Runs the existing in-memory build pipeline, then writes all built assets
  * to the output directory. Supports both app-router mode (discovers all routes)
  * and standalone entry mode (build specific files).
  * 
  * Usage:
- *   melina build                              Build all routes to ./dist
- *   melina build --outdir ./extension/dist    Build to custom directory
- *   melina build --entry src/app.ts           Build specific entry points
- *   melina build --entry src/a.ts --entry src/b.tsx --outdir ./dist
+ *   tradjs build                              Build all routes to ./dist
+ *   tradjs build --outdir ./extension/dist    Build to custom directory
+ *   tradjs build --entry src/app.ts           Build specific entry points
+ *   tradjs build --entry src/a.ts --entry src/b.tsx --outdir ./dist
  */
 
 import path from 'path';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
-import { createMeasure } from 'measure-fn';
+import { cliBuildMeasure } from './measure';
 
 import { builtAssets, buildClientScript, buildStyle } from './build';
 import { discoverRoutes } from './router';
 
-const { measure } = createMeasure('cli:build');
+const { measure } = cliBuildMeasure;
 
 export interface BuildOptions {
     /** Output directory (default: ./dist) */
@@ -49,7 +49,7 @@ export async function buildToDisk(options: BuildOptions = {}) {
             ? path.join(appDir, 'globals.css')
             : null;
 
-    console.log(`\n🦊 melina build`);
+    console.log(`\n🦊 tradjs build`);
     console.log(`   App dir:  ${appDir}`);
     console.log(`   Out dir:  ${outDir}`);
     if (globalCss) console.log(`   CSS:      ${globalCss}`);

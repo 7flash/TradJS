@@ -454,7 +454,6 @@ await start({
     appDir: './app',                    // default: './app'
     port: 3000,                         // default: 3000 or BUN_PORT env
     defaultTitle: 'My App',
-    // hotReload: true,                 // opt-in in dev, off by default
 });
 ```
 

@@ -23,7 +23,7 @@
  */
 
 import { builtAssets } from "./build";
-import { measure } from 'measure-fn';
+import { ssgMeasure } from './measure';
 import type { Route } from "./router";
 
 // ─── Pre-rendered Page Cache ────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ export async function prerender(
     routes: Route[],
     renderRoute: (route: Route) => Promise<string>,
 ): Promise<number> {
-    return await measure('SSG pre-render', async (m) => {
+    return await ssgMeasure.measure('SSG pre-render', async () => {
         let count = 0;
 
         for (const route of routes) {
@@ -102,7 +102,7 @@ export async function prerender(
 
                 const revalidateMs = typeof ssgConfig === 'object' ? (ssgConfig.revalidate ?? 0) * 1000 : undefined;
 
-                const html = await m(`Route: ${route.pattern}`, () => renderRoute(route));
+                const html = await ssgMeasure.measure(`Route: ${route.pattern}`, () => renderRoute(route));
                 if (html) {
                     setPrerendered(route.pattern, html, revalidateMs);
                     count++;
@@ -113,7 +113,7 @@ export async function prerender(
         }
 
         return count;
-    }) ?? 0;
+    });
 }
 
 /**

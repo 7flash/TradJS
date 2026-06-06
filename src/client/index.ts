@@ -23,7 +23,7 @@ export { createElement, jsx, jsxs, jsxDEV } from './render';
 export { createElement as h } from './render';
 
 // Client-side renderer
-export { render, navigate, Link, setReconciler, getReconciler } from './render';
+export { render, navigate, Link, memo, setReconciler, getReconciler } from './render';
 export type { Fiber, LinkProps, RenderOptions } from './render';
 
 // Reconciler strategies (for advanced usage)

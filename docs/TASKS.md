@@ -2,7 +2,7 @@
 
 ## 🔴 Priority: Fix
 - [x] ~~**Concurrent rebuild dedupe should use canonical asset keys**~~ — ✅ DONE. Normalized build dedupe/cache keys to absolute paths so the same file requested via relative and absolute forms now shares one in-flight build/cache entry. Added a focused concurrent style-build regression test.
-- [x] ~~**HMR should be opt-in, not default-on**~~ — ✅ DONE. Added `hotReload?: boolean` to Melina app/server options, disabled HMR by default, gated both the injected browser script and `/__melina_hmr` SSE endpoint behind explicit opt-in, and covered the behavior with router/server tests.
+- [x] ~~**HMR should be opt-in, not default-on**~~ — Completed historically, then removed entirely during `3.0.0` cleanup.
 - [x] ~~**Client script build fails with server-only deps**~~ — ✅ DONE. When `page.client.tsx` transitively imports server-only modules (e.g. `sqlite-zod-orm` → `bun:sqlite`), the Bun browser-target build failed. Three layered fixes: (1) `melina-server-stub` plugin stubs server-only packages with Proxy-based exports, (2) `buildClientScript` checks for `null` return from `measure-fn` instead of relying on `try/catch` (measure-fn swallows errors and returns null), (3) `app-router.ts` guards against null/failed builds so pages still render without client interactivity.
 
 ## 🟡 Priority: Improve
@@ -13,7 +13,7 @@
 ## 🟢 Priority: Features
 - [x] ~~**Build error reporting**~~ — ✅ DONE. After `Bun.build()`, now iterates `result.logs` and surfaces errors/warnings to the console with `[Melina Build Error/Warning]` prefix including file:line:column position. If `result.success === false`, throws with concatenated error messages instead of silently failing.
 - [x] ~~**Catch-all dynamic routes**~~ — ✅ DONE. Router now supports filesystem segments like `[...slug]`, compiling them to `*slug` patterns that capture the remaining path. Added regex matching + precedence rules so static routes win, normal params come next, and catch-all routes sort last.
-- [x] ~~**Hot reload client scripts**~~ — ✅ DONE. `hot-reload.ts` watches client script dependency trees using `fs.watch()`. On change, notifies browsers via `/__melina_hmr` SSE endpoint with 150ms debounce. Client-side reconnecting EventSource auto-reloads on `data: reload`. Dep tree walked using `Bun.Transpiler.scanImports()`. Dir watchers are per-directory with dedup. Dev-only, no-op in production.
+- [x] ~~**Hot reload client scripts**~~ — Completed historically, then removed entirely during `3.0.0` cleanup.
 - [x] ~~**CSS module / scoped styles**~~ — ✅ DONE. `buildCSSModule()` parses `.module.css` files, extracts class names, generates hash-scoped versions (`.card` → `.card_abc12345`). `melina-css-modules` Bun plugin intercepts `.module.css` imports in client scripts — injects `<style>` tag at runtime, exports class name map. Usage: `import styles from './foo.module.css'; class={styles.card}`. 7 tests. Total: 183 tests, 359 expect() calls.
 - [x] ~~**Integration test suite**~~ — ✅ DONE. Already had 165 tests across 9 files (SSR, router, build, reconciler, serve). Added `tests/integration.test.ts` with 11 full-stack tests: spins up a real Melina server, verifies SSR output, HTML structure, client script injection, nested routes, 404s, API routes, request IDs, CSS assets, concurrent requests. Total: 176 tests, 339 expect() calls.
 
