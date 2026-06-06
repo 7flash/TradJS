@@ -59,8 +59,10 @@ export function renderToString(vnode: VNode | Child): string {
             return '';
         }
         const result = (type as Component)(props || {});
-        const html = await renderToStringAsync(result);
-        return html;
+        if (result instanceof Promise) {
+            throw new Error('renderToString() does not support async components; use renderToStringAsync() instead.');
+        }
+        return renderToString(result);
     }
 
     // HTML Element

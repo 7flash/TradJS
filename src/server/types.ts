@@ -59,6 +59,4 @@ export interface AppRouterOptions {
     defaultTitle?: string;
     /** Path to global CSS file */
     globalCss?: string;
-    /** Enable dev-only SSE hot reload (default: false) */
-    hotReload?: boolean;
 }

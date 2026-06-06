@@ -38,7 +38,6 @@ You keep the familiar folder structure and JSX ergonomics, then decide manually 
 - **In-memory builds** — No `dist/` folder — assets built and served from RAM
 - **Import maps** — Browser-native module resolution for client dependencies
 - **Pluggable reconcilers** — Keyed, sequential, or replace strategies for VDOM diffing
-- **Hot reload** — Dev-only SSE-based live reload. Watches client script dep trees, reloads browser on save (v2.5.0)
 - **Auto server-only stubbing** — Scans `node_modules` for `bun:*` imports and auto-stubs them for browser builds
 - **Build error reporting** — Surfaces Bun build errors/warnings with file:line:column positions
 - **Observability** — All operations instrumented with [measure-fn](https://github.com/7flash/measure-fn)
@@ -50,7 +49,7 @@ You keep the familiar folder structure and JSX ergonomics, then decide manually 
 npx tradjs init my-app
 cd my-app
 bun install
-tradjs serve --hot-reload
+tradjs serve
 ```
 
 Or from scratch with no `server.ts`:
@@ -61,7 +60,6 @@ import { serve } from 'tradjs';
 await serve({
   port: 3000,
   defaultTitle: 'My App',
-  // hotReload: true, // opt-in in dev
 });
 ```
 
@@ -341,10 +339,9 @@ const handler = createAppRouter({
   appDir: './app',
   defaultTitle: 'My App',
   globalCss: './app/globals.css',
-  hotReload: true,
 });
 
-serve(handler, { port: 3000, hotReload: true });
+serve(handler, { port: 3000 });
 ```
 
 ### Client: `render(vnode, container)`
@@ -361,7 +358,7 @@ render(<MyComponent />, document.getElementById('root'));
 
 ```bash
 npx tradjs init <project-name>   # Create new project from template
-npx tradjs serve --hot-reload    # Start dev server
+npx tradjs serve                 # Start dev server
 ```
 
 ## Showcase
@@ -425,16 +422,11 @@ The critical difference: **Cached SSR penalizes the first visitor** with a full 
 
 If you need truly dynamic, per-request data (user-specific content, authenticated pages), use SSR. If you want caching, use SSG with `revalidate`. There's no use case where "SSR + cache the response" beats "SSG + periodic revalidation" — SSG is strictly better because it eliminates the cold-start penalty entirely.
 
-#### Hot Reload (v2.5.0)
+#### Why no built-in hot reload
 
-In dev mode, TradJS watches your client script dependency trees and auto-reloads the browser on save:
+We run the server with `tradjs serve`. When you change a file, you restart. Bun starts fast enough that this stays simple and predictable.
 
-- `hot-reload.ts` uses `fs.watch()` on directories containing client scripts and their imports
-- When a file changes, an SSE event is sent to the browser via `/__melina_hmr`
-- A reconnecting `EventSource` client in the page triggers `window.location.reload()`
-- 150ms debounce handles editors that write multiple times per save
-- Dep trees are walked using `Bun.Transpiler.scanImports()` — only local imports are followed
-- Completely no-op in production
+A built-in watcher adds platform-specific `fs.watch()` issues, invalidation complexity, and browser-reload plumbing. That tradeoff is not worth carrying in the framework.
 
 Apps can also configure server-only packages via `package.json`:
 
@@ -461,7 +453,6 @@ src/
 │   ├── ssr.ts              # renderToString (VNode → HTML)
 │   ├── head.ts             # <Head> component (side-channel collection)
 │   ├── imports.ts          # Import map generation
-│   ├── hot-reload.ts       # Dev-only SSE hot reload + file watcher
 │   └── types.ts            # Shared types
 ├── client/
 │   ├── render.ts           # VDOM renderer + Fiber reconciler (~2KB)

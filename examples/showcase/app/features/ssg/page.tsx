@@ -36,7 +36,7 @@ export default function SsgDemoPage() {
                     <div style={{ color: '#818cf8', fontWeight: '600' }} id="ssg-built-at">{builtAt}</div>
                     <div style={{ color: 'var(--color-muted)', marginTop: '8px', marginBottom: '4px' }}>Refresh this page — the timestamp stays the same!</div>
                     <div style={{ color: '#a3a3a3', fontSize: '0.8rem' }}>
-                        (In production mode. Dev mode bypasses SSG cache for hot reload.)
+                        (In production mode. Dev mode bypasses SSG cache.)
                     </div>
                 </div>
             </div>

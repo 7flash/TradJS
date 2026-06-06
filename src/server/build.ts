@@ -438,13 +438,6 @@ export function getContentType(ext: string): string {
 
 // ─── Server-Only Package Detection ─────────────────────────────────────────────
 
-const KNOWN_SERVER_PACKAGES = [
-    "sqlite-zod-orm",
-    "telegram",
-    "better-sqlite3",
-    "sqlite3",
-];
-
 let _detectedServerPackages: string[] | null = null;
 
 function escapeRegExp(input: string): string {
@@ -452,13 +445,13 @@ function escapeRegExp(input: string): string {
 }
 
 /**
- * Auto-detect server-only packages by scanning node_modules for packages
- * that use `bun:*` imports. Also reads `tradjs.serverOnly`.
+ * Auto-detect server-only packages from the current app only.
+ * Reads explicit `tradjs.serverOnly` config and scans installed deps for `bun:*` imports.
  */
 function detectServerOnlyPackages(): string[] {
     if (_detectedServerPackages) return _detectedServerPackages;
 
-    const detected = new Set<string>(KNOWN_SERVER_PACKAGES);
+    const detected = new Set<string>();
 
     try {
         const pkgPath = path.resolve(process.cwd(), "package.json");
@@ -512,17 +505,11 @@ function detectServerOnlyPackages(): string[] {
         }
     } catch (error) {
         console.warn(
-            `[tradjs] Failed to auto-detect server packages, using defaults:\n${formatUnknownError(error)}`
+            `[tradjs] Failed to auto-detect server packages:\n${formatUnknownError(error)}`
         );
     }
 
     _detectedServerPackages = [...detected];
-
-    if (isDev) {
-        console.warn(
-            `[tradjs] Server-only packages stubbed for browser: ${_detectedServerPackages.join(", ")}`
-        );
-    }
 
     return _detectedServerPackages;
 }
@@ -634,22 +621,32 @@ async function _buildClientScriptImpl(clientPath: string): Promise<string> {
     ];
 
     const serverOnlyPackages = detectServerOnlyPackages();
+    const matchedServerPackages = new Set<string>();
 
-    plugins.push({
-        name: "tradjs-server-stub",
+    if (serverOnlyPackages.length > 0) {
+        plugins.push({
+            name: "tradjs-server-stub",
 
-        setup(build: any) {
-            const filter = new RegExp(
-                `^(${serverOnlyPackages.map(escapeRegExp).join("|")})(/.*)?$`
-            );
+            setup(build: any) {
+                const filter = new RegExp(
+                    `^(${serverOnlyPackages.map(escapeRegExp).join("|")})(/.*)?$`
+                );
 
-            build.onResolve({ filter }, (args: any) => {
-                return { path: args.path, namespace: "server-stub" };
-            });
+                build.onResolve({ filter }, (args: any) => {
+                    const matchedPackage = serverOnlyPackages.find(
+                        pkg => args.path === pkg || args.path.startsWith(`${pkg}/`)
+                    );
 
-            build.onLoad({ filter: /.*/, namespace: "server-stub" }, () => {
-                return {
-                    contents: `
+                    if (matchedPackage) {
+                        matchedServerPackages.add(matchedPackage);
+                    }
+
+                    return { path: args.path, namespace: "server-stub" };
+                });
+
+                build.onLoad({ filter: /.*/, namespace: "server-stub" }, () => {
+                    return {
+                        contents: `
 const handler = {
     get: (_, p) => (
         p === Symbol.toPrimitive
@@ -669,11 +666,12 @@ export const TelegramClient = stub;
 export const StringSession = stub;
 export { stub as Api, stub as sessions };
 `,
-                    loader: "js",
-                };
-            });
-        },
-    });
+                        loader: "js",
+                    };
+                });
+            },
+        });
+    }
 
     if (usesReact) {
         external.push(
@@ -811,6 +809,12 @@ ${mapEntries}
             devMtimeCache.set(clientPath, { mtime: treeMtime, outputPath });
         } catch {
             // ok
+        }
+
+        if (matchedServerPackages.size > 0) {
+            console.warn(
+                `[tradjs] Server-only packages stubbed for browser: ${[...matchedServerPackages].sort().join(", ")}`
+            );
         }
     }
 
@@ -1364,4 +1368,8 @@ export async function asset(fileOrPath: BunFile | string): Promise<string> {
 export function clearCaches() {
     Object.keys(buildCache).forEach(key => delete buildCache[key]);
     Object.keys(builtAssets).forEach(key => delete builtAssets[key]);
+    devMtimeCache.clear();
+    buildInFlight.clear();
+    clientScriptsUsingReact.clear();
+    _detectedServerPackages = null;
 }

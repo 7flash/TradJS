@@ -32,7 +32,6 @@ Serve options:
   [port]               Explicit port (busy ports throw)
   --appdir <dir>       App directory (default: ./app, then route files in .)
   --unix <path>        Unix socket path
-  --hot-reload         Enable dev HMR endpoint + file watching
 
 Build options:
   --outdir <dir>     Output directory (default: ./dist)
@@ -65,8 +64,6 @@ if (command === 'serve') {
             options.appDir = args[++i];
         } else if (arg === '--unix') {
             options.unix = args[++i];
-        } else if (arg === '--hot-reload') {
-            options.hotReload = true;
         } else if (arg.startsWith('--')) {
             console.error(`Unknown serve option: ${arg}`);
             process.exit(1);
@@ -116,7 +113,7 @@ const files: Record<string, string> = {
     "version": "0.1.0",
     "type": "module",
     "scripts": {
-        "dev": "tradjs serve --hot-reload",
+        "dev": "tradjs serve",
         "build": "tradjs build",
         "start": "tradjs serve"
     },
