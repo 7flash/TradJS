@@ -21,7 +21,7 @@ Object.assign(globalThis, {
 });
 
 // Now import the renderer (needs DOM globals)
-import { render, createElement } from '../src/client/render';
+import { render, createElement, memo } from '../src/client/render';
 import { Fragment } from '../src/client/types';
 import type { VNode } from '../src/client/types';
 
@@ -346,4 +346,57 @@ describe('Reconciler Strategies', () => {
             expect(elapsed).toBeLessThan(100);
         });
     });
+
+    // ─── Component Re-Render Semantics ────────────────────────────────
+
+    describe('Function Components', () => {
+        test('re-renders function components with unchanged props by default', () => {
+            let mode: 'close' | 'tab' = 'close';
+
+            function App() {
+                return mode === 'close'
+                    ? h('button', { 'data-click': 'panel-close' }, 'Close panel')
+                    : h('button', { 'data-tab': 'buildings' }, 'Buildings tab');
+            }
+
+            render(h(App, null), container);
+
+            mode = 'tab';
+            render(h(App, null), container);
+
+            const button = container.querySelector('button')!;
+
+            expect(button.textContent).toBe('Buildings tab');
+            expect(button.getAttribute('data-click')).toBeNull();
+            expect(button.getAttribute('data-tab')).toBe('buildings');
+        });
+
+        test('memo explicitly skips function component rerender when props compare equal', () => {
+            let mode: 'close' | 'tab' = 'close';
+            let renders = 0;
+
+            function Inner() {
+                renders++;
+
+                return mode === 'close'
+                    ? h('button', { 'data-click': 'panel-close' }, 'Close panel')
+                    : h('button', { 'data-tab': 'buildings' }, 'Buildings tab');
+            }
+
+            const App = memo(Inner);
+
+            render(h(App, null), container);
+
+            mode = 'tab';
+            render(h(App, null), container);
+
+            const button = container.querySelector('button')!;
+
+            expect(renders).toBe(1);
+            expect(button.textContent).toBe('Close panel');
+            expect(button.getAttribute('data-click')).toBe('panel-close');
+            expect(button.getAttribute('data-tab')).toBeNull();
+        });
+    });
+
 });

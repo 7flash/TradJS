@@ -2,11 +2,9 @@
  * Server-side type definitions for Melina.js
  */
 
-import type { MeasureFn } from 'measure-fn';
-
 export type HandlerResponse = Response | AsyncGenerator<string, void, unknown> | string | object;
 
-export type Handler = (req: Request, measure: MeasureFn) => HandlerResponse | Promise<HandlerResponse>;
+export type Handler = (req: Request) => HandlerResponse | Promise<HandlerResponse>;
 
 export interface ImportConfig {
     name: string;

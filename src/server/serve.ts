@@ -7,8 +7,7 @@
 
 import { unlink } from 'fs/promises';
 import net from 'node:net';
-import { measure } from 'measure-fn';
-import type { MeasureFn } from 'measure-fn';
+import { httpMeasure } from './measure';
 import { builtAssets, getContentType } from "./build";
 import type { Handler } from "./types";
 
@@ -154,25 +153,40 @@ export async function serve(handler: Handler, options?: { port?: number; unix?: 
                     });
                 }
 
-                // Handle request — measure observes timing,
-                // onError provides a fallback Response if handler throws.
-                const response = await measure(
-                    { label: `${req.method} ${req.url}`, requestId },
-                    async (m: MeasureFn) => {
-                        return await handler(req, m);
+                // Handle request — scoped measurement observes timing.
+                // Errors throw by default; catch() is the explicit 500 fallback.
+                const response = await httpMeasure.measure(
+                    {
+                        start: () => `${req.method} ${pathname} ${requestId}`,
+                        end: (result) => {
+                            if (result instanceof Response) {
+                                return { status: result.status };
+                            }
+
+                            if (typeof result === 'object' && result != null && (result as any)[Symbol.asyncIterator]) {
+                                return { type: 'stream' };
+                            }
+
+                            if (typeof result === 'string') {
+                                return { type: 'html', bytes: result.length };
+                            }
+
+                            return { type: 'json' };
+                        },
+                        catch: (error: unknown) => {
+                            console.error("[Server Error]", error);
+                            const errorDetails = error instanceof Error ? error.message : String(error);
+                            const stackTrace = error instanceof Error && error.stack ? error.stack : 'No stack trace available';
+                            const body = isDev
+                                ? `<pre style="font-family:monospace;background:#fff1f1;padding:20px;color:#d92626">${errorDetails}\n\n${stackTrace}</pre>`
+                                : "Internal Server Error";
+                            return new Response(body, {
+                                status: 500,
+                                headers: { "Content-Type": "text/html", "Cache-Control": "no-store" },
+                            });
+                        },
                     },
-                    (error: any) => {
-                        console.error("[Server Error]", error);
-                        const errorDetails = error?.message ?? String(error);
-                        const stackTrace = error?.stack ?? 'No stack trace available';
-                        const body = isDev
-                            ? `<pre style="font-family:monospace;background:#fff1f1;padding:20px;color:#d92626">${errorDetails}\n\n${stackTrace}</pre>`
-                            : "Internal Server Error";
-                        return new Response(body, {
-                            status: 500,
-                            headers: { "Content-Type": "text/html", "Cache-Control": "no-store" },
-                        });
-                    }
+                    () => handler(req),
                 );
 
                 // Async iterator (streaming)

@@ -2,13 +2,13 @@ import { render } from 'tradjs/client';
 
 let mode: 'close' | 'tab' = 'close';
 let claimed = false;
+let rootEl: HTMLElement | null = null;
 
 function App() {
     return (
         <div>
             <div style={{ marginBottom: '16px' }}>
-                <strong>Global state:</strong>{' '}
-                mode={mode}, claimed={String(claimed)}
+                <strong>Global state:</strong> mode={mode}, claimed={String(claimed)}
             </div>
 
             <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
@@ -81,25 +81,17 @@ function inspect(root: HTMLElement) {
     }
 }
 
-let rootEl: HTMLElement | null = null;
-
 function paint() {
     if (!rootEl) return;
 
-    // IMPORTANT:
-    // This is the real repro.
-    // TradJS receives <App /> twice with unchanged props.
-    // If function components are memoized by shallow props, App will not re-run.
+    // This intentionally uses <App />, not App(), so it exercises component reconciliation.
     render(<App />, rootEl);
-
     inspect(rootEl);
 }
 
 export default function mount() {
-    rootEl =
-        document.getElementById('nomemo-root') ||
-        document.getElementById('app-root') ||
-        document.body;
+    rootEl = document.getElementById('nomemo-root');
+    if (!rootEl) return;
 
     paint();
 

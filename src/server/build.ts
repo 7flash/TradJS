@@ -11,10 +11,10 @@ import { existsSync, readFileSync } from "fs";
 import autoprefixer from "autoprefixer";
 import postcss from "postcss";
 import tailwind from "@tailwindcss/postcss";
-import { createMeasure } from "measure-fn";
+import { buildMeasure } from './measure';
 
 const isDev = process.env.NODE_ENV !== "production";
-const { measure } = createMeasure("build");
+const { measure } = buildMeasure;
 
 // ─── In-Memory Caches ──────────────────────────────────────────────────────────
 
@@ -199,39 +199,15 @@ function makeDetailedError(context: string, error: unknown): Error {
 }
 
 /**
- * measure-fn may catch the thrown error and return null.
- *
- * This wrapper stores the original error before rethrowing inside the measured fn.
- * After measure-fn returns, we rethrow the original detailed error.
+ * Build steps should fail fast. The new measure-fn throws by default,
+ * so measurement no longer changes build error semantics.
  */
 async function measured<T>(label: string, fn: () => Promise<T>): Promise<T> {
-    let capturedError: unknown = null;
-
-    const result = await measure(
-        label,
-        async () => {
-            try {
-                return await fn();
-            } catch (error) {
-                capturedError = error;
-                throw error;
-            }
-        },
-        (error: unknown) => {
-            capturedError = error;
-            return null;
-        }
-    ) as T | null;
-
-    if (capturedError) {
-        throw capturedError;
+    try {
+        return await measure(label, fn);
+    } catch (error) {
+        throw makeDetailedError(label, error);
     }
-
-    if (result === null || result === undefined) {
-        throw new Error(`[tradjs] ${label} failed without returning a result`);
-    }
-
-    return result;
 }
 
 function printBuildLogs(context: string, logs: any[] | undefined | null) {

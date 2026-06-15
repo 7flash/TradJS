@@ -6,7 +6,7 @@
  */
 
 import path from "path";
-import { measure } from 'measure-fn';
+import { importMapMeasure } from './measure';
 import type { ImportConfig, ImportMap } from "./types";
 
 const isDev = process.env.NODE_ENV !== "production";
@@ -120,7 +120,7 @@ export async function imports(
         };
     });
 
-    await measure('Generate Import Map', async (m) => {
+    await importMapMeasure.measure('Generate Import Map', async () => {
         // First pass: Collect all versions specified for base packages
         Object.entries(importsConfig).forEach(([_, imp]) => {
             const baseName = imp.baseName || (imp.name.startsWith("@") ? imp.name.split("/").slice(0, 2).join("/") : imp.name.split("/")[0]);
@@ -182,7 +182,7 @@ export async function imports(
                 importMap.imports[key + '/'] = url + subQuery + '/';
             }
 
-            m(`Import: ${key} → ${url + query}`);
+            importMapMeasure.measure.note(`Import: ${key} → ${url + query}`);
         });
     });
 

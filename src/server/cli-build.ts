@@ -14,12 +14,12 @@
 
 import path from 'path';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
-import { createMeasure } from 'measure-fn';
+import { cliBuildMeasure } from './measure';
 
 import { builtAssets, buildClientScript, buildStyle } from './build';
 import { discoverRoutes } from './router';
 
-const { measure } = createMeasure('cli:build');
+const { measure } = cliBuildMeasure;
 
 export interface BuildOptions {
     /** Output directory (default: ./dist) */

@@ -332,15 +332,19 @@ function patchFiber(
             return oldFiber;
         }
 
-        // Component — skip re-execute if props haven't changed (shallow compare)
+        // Component — always re-execute by default.
+        // Components may read global/module state, so unchanged props do not prove
+        // unchanged output. Use memo(Component) for explicit opt-in bailout.
         if (typeof newVNode.type === 'function') {
-            // Shallow-compare props (excluding children which aren't used for key matching).
-            // This is the critical optimization for keyed reconciliation:
-            // matched items have identical props → skip component re-execution entirely.
-            if (shallowPropsEqual(oldVNode.props, newVNode.props)) {
+            const compare = (newVNode.type as any).__tradjsMemoCompare as
+                | ((oldProps: any, newProps: any) => boolean)
+                | undefined;
+
+            if (compare && compare(oldVNode.props, newVNode.props)) {
                 oldFiber.vnode = newVNode;
                 return oldFiber;
             }
+
             const result = (newVNode.type as Component)(newVNode.props);
             const resultArr = result ? [result] : [];
             const componentParent = oldFiber.node || parentNode;
@@ -620,6 +624,27 @@ function reactivateScripts(root: ParentNode): void {
         if (oldScript.textContent) newScript.textContent = oldScript.textContent;
         oldScript.parentNode?.replaceChild(newScript, oldScript);
     }
+}
+
+
+// ─── Explicit Component Memoization ────────────────────────────────────────────
+
+export function memo<P extends Record<string, any>>(
+    Component: (props: P) => any,
+    compare: (oldProps: P, newProps: P) => boolean = shallowPropsEqual,
+) {
+    function MemoComponent(props: P) {
+        return Component(props);
+    }
+
+    Object.defineProperty(MemoComponent, 'name', {
+        value: Component.name ? `Memo(${Component.name})` : 'MemoComponent',
+        configurable: true,
+    });
+
+    (MemoComponent as any).__tradjsMemoCompare = compare;
+
+    return MemoComponent as typeof Component;
 }
 
 export interface LinkProps extends Props { href: string; }
