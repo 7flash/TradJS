@@ -1,81 +1,112 @@
-
 import { render } from 'tradjs/client';
 
-let count = 0;
+let mode: 'close' | 'tab' = 'close';
+let claimed = false;
 
-function Counter({ onDec, onInc, onReset }: { onDec: () => void; onInc: () => void; onReset: () => void }) {
+function App() {
     return (
         <div>
-            <div style={{
-                fontSize: '3.5rem',
-                fontWeight: '700',
-                fontFamily: 'var(--font-mono)',
-                color: count > 0 ? 'var(--color-success)' : count < 0 ? 'var(--color-danger)' : 'white',
-                marginBottom: '20px',
-                transition: 'color 0.15s ease',
-            }}>
-                {count}
+            <div style={{ marginBottom: '16px' }}>
+                <strong>Global state:</strong>{' '}
+                mode={mode}, claimed={String(claimed)}
             </div>
-            <div className="btn-group" style={{ justifyContent: 'center' }}>
-                <button className="btn" onclick={onDec}>- 1</button>
-                <button className="btn btn-accent" onclick={onInc}>+ 1</button>
-                <button className="btn" onclick={onReset}>Reset</button>
+
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                <button className="btn" onclick={() => {
+                    mode = mode === 'close' ? 'tab' : 'close';
+                    paint();
+                }}>
+                    Toggle mode
+                </button>
+
+                <button className="btn btn-accent" onclick={() => {
+                    claimed = !claimed;
+                    paint();
+                }}>
+                    Toggle claimed
+                </button>
+
+                <button className="btn" onclick={() => {
+                    mode = 'close';
+                    claimed = false;
+                    paint();
+                }}>
+                    Reset
+                </button>
             </div>
-            <div style={{
-                marginTop: '16px',
-                fontSize: '0.75rem',
-                fontFamily: 'var(--font-mono)',
-                color: 'var(--color-muted)',
-            }}>
-                State machine transitions: {count} → render() → VDOM diff → DOM patch
+
+            <div className="result-box" style={{ marginBottom: '16px' }}>
+                <h3>Function component output</h3>
+
+                {mode === 'close'
+                    ? <button data-click="panel-close">Close panel</button>
+                    : <button data-tab="buildings">Buildings tab</button>}
+
+                <div style={{ marginTop: '12px' }}>
+                    {claimed
+                        ? <em data-claimed="yes">✓ reward claimed</em>
+                        : <button data-guide-claim="build-house">Claim build-house</button>}
+                </div>
             </div>
+
+            <pre id="nomemo-result" className="code-block" />
         </div>
     );
 }
 
+function inspect(root: HTMLElement) {
+    const firstButton = root.querySelector('.result-box button') as HTMLButtonElement | null;
+    const claimButton = root.querySelector('[data-guide-claim]') as HTMLElement | null;
+    const claimedEl = root.querySelector('[data-claimed]') as HTMLElement | null;
+    const result = root.querySelector('#nomemo-result') as HTMLElement | null;
+
+    const snapshot = {
+        mode,
+        claimed,
+        firstButtonText: firstButton?.textContent ?? null,
+        dataClick: firstButton?.getAttribute('data-click') ?? null,
+        dataTab: firstButton?.getAttribute('data-tab') ?? null,
+        claimButton: claimButton?.getAttribute('data-guide-claim') ?? null,
+        claimedText: claimedEl?.textContent ?? null,
+        verdict:
+            mode === 'tab' && firstButton?.getAttribute('data-tab') !== 'buildings'
+                ? 'FAIL: component did not re-run after global mode changed'
+                : claimed && claimButton
+                    ? 'FAIL: conditional claim UI did not re-render'
+                    : 'PASS: visible DOM matches global state',
+    };
+
+    if (result) {
+        result.textContent = JSON.stringify(snapshot, null, 2);
+    }
+}
+
+let rootEl: HTMLElement | null = null;
+
+function paint() {
+    if (!rootEl) return;
+
+    // IMPORTANT:
+    // This is the real repro.
+    // TradJS receives <App /> twice with unchanged props.
+    // If function components are memoized by shallow props, App will not re-run.
+    render(<App />, rootEl);
+
+    inspect(rootEl);
+}
+
 export default function mount() {
-    const root = document.getElementById('counter-root');
-    const lifecycleRoot = document.getElementById('lifecycle-root');
-    if (!root) return;
+    rootEl =
+        document.getElementById('nomemo-root') ||
+        document.getElementById('app-root') ||
+        document.body;
 
-    const mountTime = new Date().toLocaleTimeString();
-
-    function update() {
-        render(
-            <Counter
-                onDec={() => { count--; update(); }}
-                onInc={() => { count++; update(); }}
-                onReset={() => { count = 0; update(); }}
-            />,
-            root!
-        );
-    }
-
-    update();
-
-    // Show lifecycle info
-    if (lifecycleRoot) {
-        render(
-            <div>
-                <div className="stat-row">
-                    <span className="stat-label">mount() called</span>
-                    <span className="stat-value" style={{ color: 'var(--color-accent)' }}>{mountTime}</span>
-                </div>
-                <div className="stat-row">
-                    <span className="stat-label">Status</span>
-                    <span className="stat-value" style={{ color: 'var(--color-success)' }}>✓ Active</span>
-                </div>
-                <div style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--color-muted)' }}>
-                    Navigate away and back to see a fresh mount time (cleanup runs on leave).
-                </div>
-            </div>,
-            lifecycleRoot!
-        );
-    }
+    paint();
 
     return () => {
-        count = 0;
-        render(null, root);
-        if (lifecycleRoot) render(null, lifecycleRoot);
+        if (rootEl) render(null, rootEl);
+        rootEl = null;
+        mode = 'close';
+        claimed = false;
     };
 }
