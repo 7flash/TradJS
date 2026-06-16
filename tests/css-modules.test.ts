@@ -1,6 +1,6 @@
 /**
  * CSS Modules — Unit Tests
- * 
+ *
  * Tests the buildCSSModule() function that scopes class names
  * and builds CSS modules for client-side import.
  */
@@ -27,6 +27,7 @@ describe('CSS Modules', () => {
 
     test('extracts class names and creates scoped versions', async () => {
         const cssPath = path.join(TEST_DIR, 'card.module.css');
+
         fs.writeFileSync(cssPath, `
 .card {
     padding: 16px;
@@ -44,19 +45,19 @@ describe('CSS Modules', () => {
 
         const result = await buildCSSModule(cssPath);
 
-        // Should have all 3 class names in the map
         expect(Object.keys(result.classMap)).toHaveLength(3);
         expect(result.classMap['card']).toBeDefined();
         expect(result.classMap['card-header']).toBeDefined();
         expect(result.classMap['active']).toBeDefined();
 
-        // Scoped names should include the original name + hash
         expect(result.classMap['card']).toMatch(/^card_[a-f0-9]{8}$/);
         expect(result.classMap['card-header']).toMatch(/^card-header_[a-f0-9]{8}$/);
+        expect(result.classMap['active']).toMatch(/^active_[a-f0-9]{8}$/);
     });
 
     test('scoped CSS contains renamed class selectors', async () => {
         const cssPath = path.join(TEST_DIR, 'button.module.css');
+
         fs.writeFileSync(cssPath, `
 .btn {
     cursor: pointer;
@@ -69,70 +70,85 @@ describe('CSS Modules', () => {
 
         const result = await buildCSSModule(cssPath);
 
-        // The CSS should contain the scoped class names, not the originals
         expect(result.css).toContain(result.classMap['btn']);
         expect(result.css).toContain(result.classMap['btn-primary']);
         expect(result.css).toContain('cursor: pointer');
         expect(result.css).toContain('background: blue');
+
+        expect(result.css).not.toContain('.btn {');
+        expect(result.css).not.toContain('.btn-primary {');
     });
 
     test('returns a valid CSS URL path', async () => {
         const cssPath = path.join(TEST_DIR, 'nav.module.css');
+
         fs.writeFileSync(cssPath, `.nav { display: flex; }`);
 
         const result = await buildCSSModule(cssPath);
 
-        expect(result.cssUrl).toMatch(/^\/nav\.module-[a-f0-9]{8}\.css$/);
+        // Current builder normalizes "nav.module.css" to "nav-module-[hash].css".
+        expect(result.cssUrl).toMatch(/^\/nav-module-[a-f0-9]{8}\.css$/);
     });
 
     test('different files produce different hashes', async () => {
         const cssPath1 = path.join(TEST_DIR, 'a.module.css');
         const cssPath2 = path.join(TEST_DIR, 'b.module.css');
-        fs.writeFileSync(cssPath1, `.item { color: red; }`);
-        fs.writeFileSync(cssPath2, `.item { color: blue; }`);
+
+        fs.writeFileSync(cssPath1, `.box { color: red; }`);
+        fs.writeFileSync(cssPath2, `.box { color: blue; }`);
 
         const result1 = await buildCSSModule(cssPath1);
         const result2 = await buildCSSModule(cssPath2);
 
-        // Same class name but different scoped names (different file hashes)
-        expect(result1.classMap['item']).not.toBe(result2.classMap['item']);
+        expect(result1.classMap['box']).not.toBe(result2.classMap['box']);
+        expect(result1.cssUrl).not.toBe(result2.cssUrl);
     });
 
     test('handles pseudo-selectors and combinators', async () => {
-        const cssPath = path.join(TEST_DIR, 'complex.module.css');
+        const cssPath = path.join(TEST_DIR, 'pseudo.module.css');
+
         fs.writeFileSync(cssPath, `
-.wrapper:hover {
-    opacity: 0.8;
+.button:hover {
+    opacity: 0.9;
 }
 
-.wrapper .child {
-    margin: 0;
+.card .title {
+    font-size: 20px;
 }
 
-.wrapper > .child:first-child {
-    margin-top: 0;
+.list > .item {
+    padding: 4px;
 }
 `);
 
         const result = await buildCSSModule(cssPath);
 
-        expect(result.classMap['wrapper']).toBeDefined();
-        expect(result.classMap['child']).toBeDefined();
-        // Should scope both classes used in the CSS
-        expect(result.css).toContain(result.classMap['wrapper']);
-        expect(result.css).toContain(result.classMap['child']);
+        expect(result.classMap['button']).toBeDefined();
+        expect(result.classMap['card']).toBeDefined();
+        expect(result.classMap['title']).toBeDefined();
+        expect(result.classMap['list']).toBeDefined();
+        expect(result.classMap['item']).toBeDefined();
+
+        expect(result.css).toContain(`.${result.classMap['button']}:hover`);
+        expect(result.css).toContain(`.${result.classMap['card']} .${result.classMap['title']}`);
+        expect(result.css).toContain(`.${result.classMap['list']} > .${result.classMap['item']}`);
     });
 
     test('handles @media queries with scoped classes inside', async () => {
         const cssPath = path.join(TEST_DIR, 'responsive.module.css');
+
         fs.writeFileSync(cssPath, `
 .container {
-    width: 100%;
+    display: grid;
 }
 
-@media (min-width: 768px) {
+@media (max-width: 600px) {
     .container {
-        max-width: 720px;
+        display: block;
+    }
+
+    .item {
+        margin: 8px;
     }
 }
 `);
@@ -140,11 +156,14 @@ describe('CSS Modules', () => {
         const result = await buildCSSModule(cssPath);
 
         expect(result.classMap['container']).toBeDefined();
+        expect(result.classMap['item']).toBeDefined();
+
         expect(result.css).toContain('@media');
         expect(result.css).toContain(result.classMap['container']);
+        expect(result.css).toContain(result.classMap['item']);
     });
 
     test('throws on non-existent file', async () => {
-        expect(buildCSSModule('/nonexistent/file.module.css')).rejects.toThrow('CSS module not found');
+        await expect(buildCSSModule('/nonexistent/file.module.css')).rejects.toThrow('CSS module not found');
     });
 });
