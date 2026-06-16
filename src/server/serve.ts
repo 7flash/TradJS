@@ -155,7 +155,7 @@ export async function serve(handler: Handler, options?: { port?: number; unix?: 
 
                 // Handle request — scoped measurement observes timing.
                 // Errors throw by default; catch() is the explicit 500 fallback.
-                const response = await httpMeasure.measure(
+                const response = await httpMeasure.measure.root(
                     {
                         start: () => `${req.method} ${pathname} ${requestId}`,
                         end: (result) => {
