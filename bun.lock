@@ -7,7 +7,7 @@
       "dependencies": {
         "@tailwindcss/postcss": "^4.1.10",
         "autoprefixer": "^10.4.21",
-        "measure-fn": "^4.0.2",
+        "measure-fn": "4.0.3",
         "postcss": "^8.5.6",
         "ts-dedent": "^2.2.0",
       },
@@ -178,7 +178,7 @@
 
     "mdn-data": ["mdn-data@2.12.2", "", {}, "sha512-IEn+pegP1aManZuckezWCO+XZQDplx1366JoVhTpMpBB1sPey/SbveZQUosKiKiGYjg1wH4pMlNgXbCiYgihQA=="],
 
-    "measure-fn": ["measure-fn@4.0.2", "", { "peerDependencies": { "typescript": "^5" } }, "sha512-XUNSGjJ61csxIm42dmiX6aca0h1K/rOuiv/FK8ezgjg97rkoR8ldzPHiQ5d3EzwUVv7UGcUgUOzt8/OsA6VIMw=="],
+    "measure-fn": ["measure-fn@4.0.3", "", { "peerDependencies": { "typescript": "^5" } }, "sha512-LpG/hoM0qWZNl7LuAPoN01TGouhHJ3SqLFjHw1FeNJCyUFX9oMSZ2g12/7xn3RMY0J0uLDsQUfKmyjuJTyVKfw=="],
 
     "minipass": ["minipass@7.1.2", "", {}, "sha512-qOOzS1cBTWYF4BH8fVePDBOO9iptMnGUEZwNc/cMWnTV2nVLZ7VoNWEPHkYczZA0pdoA7dl6e7FL659nX9S2aw=="],
 
