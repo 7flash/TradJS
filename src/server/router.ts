@@ -182,7 +182,7 @@ const IGNORED_DIR_NAMES = new Set([
     '.git',
     'dist',
     'package',
-    '.melina',
+    '.tradjs',
     '.prompts',
     '.vscode',
     '.idea',

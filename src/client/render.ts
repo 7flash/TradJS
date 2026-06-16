@@ -534,9 +534,16 @@ function getNextSibling(fiber: Fiber, parentNode: Node): Node | null {
 
 // ─── Navigation ────────────────────────────────────────────────────────────────
 
-export async function navigate(href: string, _skipPushState = false): Promise<void> {
+export interface NavigateOptions {
+    replace?: boolean;
+    scroll?: boolean;
+    state?: unknown;
+}
+
+export async function navigate(href: string, options: NavigateOptions | boolean = {}): Promise<void> {
     if (typeof window === 'undefined') return;
     try {
+        const opts: NavigateOptions = typeof options === 'boolean' ? { replace: options } : options;
         const resolvedHref = new URL(href, window.location.href).toString();
         const response = await fetch(resolvedHref);
         const html = await response.text();
@@ -550,12 +557,14 @@ export async function navigate(href: string, _skipPushState = false): Promise<vo
         const fragment = document.createDocumentFragment();
         while (newDoc.body.firstChild) fragment.appendChild(document.adoptNode(newDoc.body.firstChild));
 
-        if (!_skipPushState) {
-            window.history.pushState({}, '', resolvedHref);
+        if (opts.replace) {
+            window.history.replaceState(opts.state ?? {}, '', resolvedHref);
+        } else {
+            window.history.pushState(opts.state ?? {}, '', resolvedHref);
         }
         const update = () => {
             document.body.replaceChildren(fragment);
-            window.scrollTo(0, 0);
+            if (opts.scroll !== false) window.scrollTo(0, 0);
         };
 
         if (document.startViewTransition) {
@@ -572,8 +581,8 @@ export async function navigate(href: string, _skipPushState = false): Promise<vo
 }
 
 function runPageCleanups(): void {
-    const cleanups = Array.isArray((window as any).__melinaCleanups__)
-        ? (window as any).__melinaCleanups__
+    const cleanups = Array.isArray((window as any).__tradjsCleanups__)
+        ? (window as any).__tradjsCleanups__
         : [];
 
     for (const entry of cleanups) {
@@ -585,7 +594,7 @@ function runPageCleanups(): void {
         }
     }
 
-    (window as any).__melinaCleanups__ = [];
+    (window as any).__tradjsCleanups__ = [];
 }
 
 function syncHead(newDoc: Document): void {
@@ -692,8 +701,8 @@ export const jsxDEV = jsx;
 // Without this guard, each bundle registers its own click interceptor,
 // causing duplicate fetches on every navigation.
 
-if (typeof window !== 'undefined' && !(window as any).__melinaNavInit__) {
-    (window as any).__melinaNavInit__ = true;
+if (typeof window !== 'undefined' && !(window as any).__tradjsNavInit__) {
+    (window as any).__tradjsNavInit__ = true;
 
     document.addEventListener('click', (e) => {
         const link = (e.target as Element).closest('a[href]') as HTMLAnchorElement;
@@ -705,6 +714,6 @@ if (typeof window !== 'undefined' && !(window as any).__melinaNavInit__) {
     });
 
     window.addEventListener('popstate', () => {
-        navigate(window.location.href, true);
+        navigate(window.location.href, { replace: true, scroll: false });
     });
 }

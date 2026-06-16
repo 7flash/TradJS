@@ -1,5 +1,5 @@
 /**
- * melina/client — Reconciler Benchmarks
+ * tradjs/client — Reconciler Benchmarks
  * 
  * Validates the three reconciliation strategies and proves their correctness
  * with measurable performance data.

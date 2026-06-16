@@ -1,5 +1,5 @@
 /**
-	 * melina — Server-Side Rendering
+	 * tradjs — Server-Side Rendering
 	 *
 	 * String-based HTML renderer for VNodes. This module has ZERO DOM dependencies
 	 * and runs exclusively on the server. It is never bundled into client scripts.

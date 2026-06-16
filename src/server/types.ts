@@ -1,5 +1,5 @@
 /**
- * Server-side type definitions for Melina.js
+ * Server-side type definitions for TradJS
  */
 
 export type HandlerResponse = Response | AsyncGenerator<string, void, unknown> | string | object;

@@ -434,7 +434,7 @@ function detectServerOnlyPackages(): string[] {
 
         if (existsSync(pkgPath)) {
             const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-            const configList = pkg?.tradjs?.serverOnly ?? pkg?.fastjs?.serverOnly ?? pkg?.lastjs?.serverOnly ?? pkg?.melina?.serverOnly;
+            const configList = pkg?.tradjs?.serverOnly;
 
             if (Array.isArray(configList)) {
                 for (const name of configList) {
@@ -672,15 +672,15 @@ export { stub as Api, stub as sessions };
                     return { path: jsxDevRuntimePath };
                 });
 
-                build.onResolve({ filter: /^(tradjs|fastjs|lastjs|melina)\/client\/jsx-dev-runtime$/ }, () => {
+                build.onResolve({ filter: /^tradjs\/client\/jsx-dev-runtime$/ }, () => {
                     return { path: jsxDevRuntimePath };
                 });
 
-                build.onResolve({ filter: /^(tradjs|fastjs|lastjs|melina)\/client\/jsx-runtime$/ }, () => {
+                build.onResolve({ filter: /^tradjs\/client\/jsx-runtime$/ }, () => {
                     return { path: jsxRuntimePath };
                 });
 
-                build.onResolve({ filter: /^(tradjs|fastjs|lastjs|melina)\/client$/ }, () => {
+                build.onResolve({ filter: /^tradjs\/client$/ }, () => {
                     return { path: clientIndexPath };
                 });
             },
