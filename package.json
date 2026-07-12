@@ -1,6 +1,6 @@
 {
   "name": "tradjs",
-  "version": "4.1.3",
+  "version": "4.2.0",
   "description": "A Next.js-inspired Bun framework with file-based routing, server-rendered JSX, and a flexible client runtime.",
   "module": "./src/web.ts",
   "main": "./src/web.ts",

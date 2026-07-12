@@ -2,18 +2,68 @@
  * Keyed Reconciler — O(n log n) via key→fiber map + LIS
  *
  * Matches old and new children by `key` prop. Uses Longest Increasing
- * Subsequence to minimize DOM moves. This is the same algorithm used
- * by Inferno, Preact, and Solid.
+ * Subsequence to minimize DOM moves.
  *
- * Trade-offs:
- *   ✅ Optimal for list mutations (insert, delete, reorder)
- *   ✅ Preserves DOM nodes across position changes
- *   ✅ Minimal DOM operations via LIS
- *   ❌ Higher overhead per diff (Map + Set + LIS computation)
- *   ❌ Requires unique keys on children
+ * This version hardens DOM insertion against stale anchors. Browsers throw
+ * NotFoundError when parent.insertBefore(node, anchor) is called and `anchor`
+ * is no longer a direct child of `parent`. High-churn keyed lists can hit that
+ * path if a previous reconciliation step, cleanup, route swap, or third-party
+ * DOM mutation detaches the anchor before the move pass completes.
  */
 
 import type { Reconciler } from "./types";
+
+type AnyFiber = any;
+
+function isParentedBy(
+  parentNode: Node,
+  node: Node | null | undefined,
+): node is Node {
+  return !!node && node.parentNode === parentNode;
+}
+
+function firstParentedNode(parentNode: Node, nodes: Node[]): Node | null {
+  return nodes.find((node) => isParentedBy(parentNode, node)) ?? null;
+}
+
+function allNodesParentedBy(parentNode: Node, nodes: Node[]): boolean {
+  return (
+    nodes.length > 0 && nodes.every((node) => node.parentNode === parentNode)
+  );
+}
+
+function safeInsertBefore(
+  parentNode: Node,
+  node: Node,
+  anchor: Node | null,
+): void {
+  const safeAnchor = isParentedBy(parentNode, anchor) ? anchor : null;
+
+  // Avoid self-insertion and no-op moves. These are harmless in some DOMs but
+  // can still produce surprising behavior with fragments/polyfilled DOMs.
+  if (node === safeAnchor) return;
+  if (node.parentNode === parentNode && node.nextSibling === safeAnchor) return;
+
+  if (safeAnchor) parentNode.insertBefore(node, safeAnchor);
+  else parentNode.appendChild(node);
+}
+
+function safeInsertNodesBefore(
+  parentNode: Node,
+  nodes: Node[],
+  anchor: Node | null,
+): Node | null {
+  if (nodes.length === 0)
+    return isParentedBy(parentNode, anchor) ? anchor : null;
+
+  // Keep multi-node fragments in their natural order. Use the same validated
+  // anchor for the group; insertBefore moves existing children automatically.
+  for (const node of nodes) {
+    safeInsertBefore(parentNode, node, anchor);
+  }
+
+  return firstParentedNode(parentNode, nodes);
+}
 
 export const keyedReconciler: Reconciler = (
   parentFiber,
@@ -22,82 +72,85 @@ export const keyedReconciler: Reconciler = (
   newVNodes,
   ctx,
 ) => {
-  // Build key → fiber map
-  const oldKeyMap = new Map<string | number, any>();
-  const oldIndexMap = new Map<any, number>();
+  // Build key → fiber map.
+  const oldKeyMap = new Map<string | number, AnyFiber>();
+  const oldIndexMap = new Map<AnyFiber, number>();
+
   for (let i = 0; i < oldFibers.length; i++) {
-    const f = oldFibers[i];
-    if (f.key != null) oldKeyMap.set(f.key, f);
-    oldIndexMap.set(f, i);
+    const fiber = oldFibers[i] as AnyFiber;
+    if (fiber.key != null) oldKeyMap.set(fiber.key, fiber);
+    oldIndexMap.set(fiber, i);
   }
 
-  const newFibers: any[] = [];
-  const usedOldFibers = new Set<any>();
+  const newFibers: AnyFiber[] = [];
+  const usedOldFibers = new Set<AnyFiber>();
   const sources: number[] = [];
 
-  // First pass: match by key, patch reusable fibers
+  // First pass: match by key and patch reusable fibers.
   for (let i = 0; i < newVNodes.length; i++) {
-    const v = newVNodes[i];
+    const vnode = newVNodes[i];
     const key =
-      v && typeof v === "object" && "key" in v ? (v as any).key : null;
+      vnode && typeof vnode === "object" && "key" in vnode
+        ? (vnode as any).key
+        : null;
 
-    let oldFib: any | undefined;
-    if (key != null) oldFib = oldKeyMap.get(key);
+    const oldFiber = key != null ? oldKeyMap.get(key) : undefined;
 
-    if (oldFib && !usedOldFibers.has(oldFib)) {
-      usedOldFibers.add(oldFib);
-      const patched = ctx.patchFiber(oldFib, v!, parentFiber, parentNode);
-      newFibers.push(patched!);
-      sources.push(oldIndexMap.get(oldFib)!);
+    if (oldFiber && !usedOldFibers.has(oldFiber)) {
+      usedOldFibers.add(oldFiber);
+
+      const patched = ctx.patchFiber(
+        oldFiber,
+        vnode!,
+        parentFiber,
+        parentNode,
+      ) as AnyFiber | null;
+      if (patched) {
+        newFibers.push(patched);
+        sources.push(oldIndexMap.get(oldFiber) ?? -1);
+      }
     } else {
-      // Mount new — but don't append to DOM yet, we'll position in second pass
-      const fiber = ctx.mountVNode(v!, parentFiber);
-      if (fiber) {
-        newFibers.push(fiber);
+      // Mount new without appending. The second pass positions it.
+      const mounted = ctx.mountVNode(vnode!, parentFiber) as AnyFiber | null;
+      if (mounted) {
+        newFibers.push(mounted);
         sources.push(-1);
       }
     }
   }
 
-  // Remove old fibers not reused
-  for (const oldFib of oldFibers) {
-    if (!usedOldFibers.has(oldFib)) {
-      ctx.removeFiber(oldFib, parentNode);
+  // Remove old fibers not reused.
+  for (const oldFiber of oldFibers as AnyFiber[]) {
+    if (!usedOldFibers.has(oldFiber)) {
+      ctx.removeFiber(oldFiber, parentNode);
     }
   }
 
-  // Compute LIS to minimize moves
-  const oldIndicesOnly = sources.filter((s) => s !== -1);
+  // Compute LIS over existing-source indexes so we only move nodes that need it.
+  const oldIndicesOnly = sources.filter((source) => source !== -1);
   const lisIndices = longestIncreasingSubsequence(oldIndicesOnly);
-  const lisValues = new Set(lisIndices.map((i) => oldIndicesOnly[i]));
+  const lisValues = new Set(lisIndices.map((index) => oldIndicesOnly[index]));
 
-  // Second pass: position all nodes correctly (right to left)
+  // Second pass: position nodes right-to-left. The carried anchor is always
+  // revalidated immediately before insertion. If it went stale, we fall back
+  // to append instead of letting DOM throw NotFoundError.
   let anchor: Node | null = null;
+
   for (let i = newFibers.length - 1; i >= 0; i--) {
     const fiber = newFibers[i];
-    const needsMove = sources[i] === -1 || !lisValues.has(sources[i]);
+    const nodes = ctx.collectNodes(fiber).filter(Boolean);
+    if (nodes.length === 0) continue;
 
-    if (needsMove) {
-      const nodes = ctx.collectNodes(fiber);
-      if (nodes.length === 0) continue;
-      for (const node of nodes) {
-        if (anchor) {
-          parentNode.insertBefore(node, anchor);
-        } else {
-          parentNode.appendChild(node);
-        }
-      }
-      anchor = nodes[0];
+    const source = sources[i];
+    const needsMove = source === -1 || !lisValues.has(source);
+    const detached = !allNodesParentedBy(parentNode, nodes);
+
+    if (needsMove || detached) {
+      const first = safeInsertNodesBefore(parentNode, nodes, anchor);
+      if (first) anchor = first;
     } else {
-      // Non-moving item — just get the first node for anchor without full traversal
-      const node = fiber.node;
-      if (node) {
-        anchor = node;
-      } else if (fiber.children.length > 0) {
-        // Component/fragment fiber — find first child's node
-        const nodes = ctx.collectNodes(fiber);
-        if (nodes.length > 0) anchor = nodes[0];
-      }
+      const first = firstParentedNode(parentNode, nodes);
+      if (first) anchor = first;
     }
   }
 
@@ -105,37 +158,31 @@ export const keyedReconciler: Reconciler = (
 };
 
 /**
- * Longest Increasing Subsequence — O(n log n)
- *
- * Returns indices of elements forming the LIS. Nodes at these positions
- * are already in correct relative order and don't need DOM moves.
- *
- * Algorithm: Patience sorting + backtracking.
+ * Returns indexes into `arr` that form the longest increasing subsequence.
  */
 function longestIncreasingSubsequence(arr: number[]): number[] {
   if (arr.length === 0) return [];
 
-  const n = arr.length;
+  const predecessors = new Array<number>(arr.length).fill(-1);
   const tails: number[] = [];
-  const indices: number[] = [];
-  const predecessors: number[] = new Array(n).fill(-1);
 
-  for (let i = 0; i < n; i++) {
-    let lo = 0,
-      hi = tails.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (tails[mid] < arr[i]) lo = mid + 1;
-      else hi = mid;
+  for (let i = 0; i < arr.length; i++) {
+    let low = 0;
+    let high = tails.length;
+
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (arr[tails[mid]] < arr[i]) low = mid + 1;
+      else high = mid;
     }
 
-    tails[lo] = arr[i];
-    indices[lo] = i;
-    if (lo > 0) predecessors[i] = indices[lo - 1];
+    if (low > 0) predecessors[i] = tails[low - 1];
+    tails[low] = i;
   }
 
-  const result: number[] = [];
-  let k = indices[tails.length - 1];
+  const result = new Array<number>(tails.length);
+  let k = tails[tails.length - 1];
+
   for (let i = tails.length - 1; i >= 0; i--) {
     result[i] = k;
     k = predecessors[k];
