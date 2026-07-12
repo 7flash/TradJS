@@ -3,52 +3,53 @@
  */
 
 interface BenchResult {
-    method: string;
-    avgMs: number;
-    medianMs: number;
-    p99Ms: number;
-    description: string;
+  method: string;
+  avgMs: number;
+  medianMs: number;
+  p99Ms: number;
+  description: string;
 }
 
 async function mount() {
-    const container = document.getElementById('benchmark-chart');
-    if (!container) return;
+  const container = document.getElementById("benchmark-chart");
+  if (!container) return;
 
-    container.innerHTML = `
+  container.innerHTML = `
         <div style="text-align: center; padding: 40px; color: var(--color-muted)">
             <div style="font-size: 1.5rem; margin-bottom: 8px">⏱</div>
             Running benchmark (100 iterations)...
         </div>
     `;
 
-    try {
-        const res = await fetch('/api/benchmark-ssg');
-        const data = await res.json();
-        const results: BenchResult[] = data.results;
+  try {
+    const res = await fetch("/api/benchmark-ssg");
+    const data = await res.json();
+    const results: BenchResult[] = data.results;
 
-        if (!results || results.length === 0) {
-            container.innerHTML = `<div style="padding: 20px; color: #ef4444">Benchmark returned no results</div>`;
-            return;
-        }
+    if (!results || results.length === 0) {
+      container.innerHTML = `<div style="padding: 20px; color: #ef4444">Benchmark returned no results</div>`;
+      return;
+    }
 
-        const maxAvg = Math.max(...results.map(r => r.avgMs));
+    const maxAvg = Math.max(...results.map((r) => r.avgMs));
 
-        const colors: Record<string, string> = {
-            'SSG (memory)': '#10b981',
-            'SSR (fresh)': '#f59e0b',
-            'Cached SSR': '#818cf8',
-        };
+    const colors: Record<string, string> = {
+      "SSG (memory)": "#10b981",
+      "SSR (fresh)": "#f59e0b",
+      "Cached SSR": "#818cf8",
+    };
 
-        const barHtml = results.map((r, i) => {
-            const pct = maxAvg > 0 ? Math.max((r.avgMs / maxAvg) * 100, 2) : 2;
-            const color = colors[r.method] || '#6b7280';
-            const isSSG = r.method.includes('SSG');
+    const barHtml = results
+      .map((r, i) => {
+        const pct = maxAvg > 0 ? Math.max((r.avgMs / maxAvg) * 100, 2) : 2;
+        const color = colors[r.method] || "#6b7280";
+        const isSSG = r.method.includes("SSG");
 
-            return `
+        return `
                 <div style="margin-bottom: 20px">
                     <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px">
                         <span style="font-weight: 600; color: ${color}; font-size: 0.95rem">
-                            ${r.method} ${isSSG ? '⚡' : ''}
+                            ${r.method} ${isSSG ? "⚡" : ""}
                         </span>
                         <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--color-text-secondary)">
                             avg: ${r.avgMs.toFixed(4)}ms · median: ${r.medianMs.toFixed(4)}ms · p99: ${r.p99Ms.toFixed(4)}ms
@@ -77,15 +78,17 @@ async function mount() {
                                 font-weight: 600;
                                 text-shadow: 0 1px 2px rgba(0,0,0,0.3);
                                 white-space: nowrap;
-                            ">${r.avgMs < 0.001 ? '<0.001ms' : r.avgMs.toFixed(3) + 'ms'}</span>
+                            ">${r.avgMs < 0.001 ? "<0.001ms" : r.avgMs.toFixed(3) + "ms"}</span>
                         </div>
                     </div>
                     <div style="font-size: 0.78rem; color: var(--color-muted); margin-top: 4px">${r.description}</div>
                 </div>
             `;
-        }).join('');
+      })
+      .join("");
 
-        const summaryHtml = data.summary ? `
+    const summaryHtml = data.summary
+      ? `
             <div style="
                 margin-top: 20px;
                 padding: 16px;
@@ -101,28 +104,28 @@ async function mount() {
                 <div>📦 ${data.summary.ssgVsCached}</div>
                 <div style="font-size: 0.8rem; color: var(--color-muted); margin-top: 8px">${data.summary.note}</div>
             </div>
-        ` : '';
+        `
+      : "";
 
-        container.innerHTML = barHtml + summaryHtml;
+    container.innerHTML = barHtml + summaryHtml;
 
-        // Animate bars in
-        requestAnimationFrame(() => {
-            setTimeout(() => {
-                document.querySelectorAll('.bench-bar').forEach((bar) => {
-                    const el = bar as HTMLElement;
-                    const target = el.dataset.target;
-                    if (target) el.style.width = target + '%';
-                });
-            }, 50);
+    // Animate bars in
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        document.querySelectorAll(".bench-bar").forEach((bar) => {
+          const el = bar as HTMLElement;
+          const target = el.dataset.target;
+          if (target) el.style.width = target + "%";
         });
-
-    } catch (err: any) {
-        container.innerHTML = `
+      }, 50);
+    });
+  } catch (err: any) {
+    container.innerHTML = `
             <div style="padding: 20px; color: #ef4444">
                 Benchmark failed: ${err.message}
             </div>
         `;
-    }
+  }
 }
 
 mount();

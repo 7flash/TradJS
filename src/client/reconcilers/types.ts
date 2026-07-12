@@ -1,13 +1,13 @@
 /**
  * tradjs/client/reconcilers — Reconciler Strategy Interface
- * 
+ *
  * Defines the contract that all reconcilers must implement.
  * This enables hot-swapping reconciliation strategies at build time
  * or runtime without touching the core renderer.
- * 
+ *
  * HOW TO CHOOSE A RECONCILER:
  * ──────────────────────────────
- * 
+ *
  * ┌─────────────────────────────────────────────────────────────────────┐
  * │  Use Case                              │  Best Strategy            │
  * ├─────────────────────────────────────────────────────────────────────┤
@@ -17,11 +17,11 @@
  * │  Large lists (1000+) with reorders     │  keyed                    │
  * │  Simple apps, smallest bundle size     │  sequential               │
  * └─────────────────────────────────────────────────────────────────────┘
- * 
+ *
  * The default reconciler (`auto`) inspects children for `key` props and
  * automatically selects keyed or sequential. This is the best choice for
  * most apps. Override only if you're optimizing a specific workload.
- * 
+ *
  * BENCHMARKS (JSDOM, 1000 items, single run):
  * ──────────────────────────────────────────────
  *   Mount 1000 items:           ~9ms
@@ -30,8 +30,8 @@
  *   Partial update 10/1000:     ~2ms
  */
 
-import type { Fiber } from '../render';
-import type { VNode, Child } from '../types';
+import type { Fiber } from "../render";
+import type { VNode, Child } from "../types";
 
 /**
  * A Reconciler takes old fibers and new VNodes and updates the DOM.
@@ -42,11 +42,11 @@ import type { VNode, Child } from '../types';
  *   4. Update parentFiber.children with the new fiber list
  */
 export type Reconciler = (
-    parentFiber: Fiber,
-    parentNode: Node,
-    oldFibers: Fiber[],
-    newVNodes: (VNode | Child)[],
-    ctx: ReconcilerContext,
+  parentFiber: Fiber,
+  parentNode: Node,
+  oldFibers: Fiber[],
+  newVNodes: (VNode | Child)[],
+  ctx: ReconcilerContext,
 ) => void;
 
 /**
@@ -54,10 +54,19 @@ export type Reconciler = (
  * each strategy doesn't need to duplicate mount/patch/remove logic.
  */
 export interface ReconcilerContext {
-    mountVNode: (vnode: VNode | Child, parentFiber: Fiber, parentNode?: Node) => Fiber | null;
-    patchFiber: (oldFiber: Fiber, newVNode: VNode | Child, parentFiber: Fiber, parentNode: Node) => Fiber | null;
-    removeFiber: (fiber: Fiber, parentNode: Node) => void;
-    collectNodes: (fiber: Fiber) => Node[];
+  mountVNode: (
+    vnode: VNode | Child,
+    parentFiber: Fiber,
+    parentNode?: Node,
+  ) => Fiber | null;
+  patchFiber: (
+    oldFiber: Fiber,
+    newVNode: VNode | Child,
+    parentFiber: Fiber,
+    parentNode: Node,
+  ) => Fiber | null;
+  removeFiber: (fiber: Fiber, parentNode: Node) => void;
+  collectNodes: (fiber: Fiber) => Node[];
 }
 
-export type ReconcilerName = 'auto' | 'keyed' | 'sequential' | 'replace';
+export type ReconcilerName = "auto" | "keyed" | "sequential" | "replace";

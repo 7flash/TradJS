@@ -1,11 +1,11 @@
-import path from 'path';
-import { start } from '../../src/web';
+import path from "path";
+import { start } from "../../src/web";
 
-const appDir = path.join(import.meta.dir, 'app');
+const appDir = path.join(import.meta.dir, "app");
 
-console.log('[port-check] starting implicit server from port 3000');
+console.log("[port-check] starting implicit server from port 3000");
 
 await start({
-    appDir,
-    defaultTitle: 'Port Check',
+  appDir,
+  defaultTitle: "Port Check",
 });

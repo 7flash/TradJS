@@ -1,9 +1,8 @@
 #!/usr/bin/env bun
 
-
 /**
  * tradjs CLI — Project scaffolding & build tools
- * 
+ *
  * Usage:
  *   npx tradjs init <project-name>   Create a new TradJS project
  *   npx tradjs init                  Create in current directory
@@ -16,8 +15,8 @@
 const args = process.argv.slice(2);
 const command = args[0];
 
-if (!command || command === '--help' || command === '-h') {
-    console.log(`
+if (!command || command === "--help" || command === "-h") {
+  console.log(`
 🦊 tradjs — Bun-native web framework
 
 Usage:
@@ -42,74 +41,78 @@ Build options:
 Options:
   --help, -h         Show this help message
 `);
-    process.exit(0);
+  process.exit(0);
 }
 
-if (command === 'build') {
-    // Dynamic import to avoid loading build deps for init command
-    const { buildToDisk, parseBuildArgs } = await import('../src/server/cli-build');
-    const options = parseBuildArgs(args.slice(1));
-    await buildToDisk(options);
-    process.exit(0);
+if (command === "build") {
+  // Dynamic import to avoid loading build deps for init command
+  const { buildToDisk, parseBuildArgs } =
+    await import("../src/server/cli-build");
+  const options = parseBuildArgs(args.slice(1));
+  await buildToDisk(options);
+  process.exit(0);
 }
 
-if (command === 'serve') {
-    const { serve } = await import('../src/server');
-    const options: Record<string, any> = {};
+if (command === "serve") {
+  const { serve } = await import("../src/server");
+  const options: Record<string, any> = {};
 
-    for (let i = 1; i < args.length; i++) {
-        const arg = args[i];
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
 
-        if (arg === '--appdir') {
-            options.appDir = args[++i];
-        } else if (arg === '--unix') {
-            options.unix = args[++i];
-        } else if (arg.startsWith('--')) {
-            console.error(`Unknown serve option: ${arg}`);
-            process.exit(1);
-        } else if (options.port === undefined && /^\d+$/.test(arg)) {
-            options.port = Number(arg);
-        } else if (options.unix === undefined) {
-            options.unix = arg;
-        } else {
-            console.error(`Unexpected argument: ${arg}`);
-            process.exit(1);
-        }
+    if (arg === "--appdir") {
+      options.appDir = args[++i];
+    } else if (arg === "--unix") {
+      options.unix = args[++i];
+    } else if (arg.startsWith("--")) {
+      console.error(`Unknown serve option: ${arg}`);
+      process.exit(1);
+    } else if (options.port === undefined && /^\d+$/.test(arg)) {
+      options.port = Number(arg);
+    } else if (options.unix === undefined) {
+      options.unix = arg;
+    } else {
+      console.error(`Unexpected argument: ${arg}`);
+      process.exit(1);
     }
+  }
 
-    await serve(options);
-    await new Promise(() => { });
+  await serve(options);
+  await new Promise(() => {});
 }
 
-if (command !== 'init') {
-    console.error(`Unknown command: ${command}\nRun 'npx tradjs --help' for usage.`);
-    process.exit(1);
+if (command !== "init") {
+  console.error(
+    `Unknown command: ${command}\nRun 'npx tradjs --help' for usage.`,
+  );
+  process.exit(1);
 }
 
 // ─── Init Command ──────────────────────────────────────────────────────────────
 
-const projectName = args[1] || '.';
-const targetDir = projectName === '.' ? process.cwd() : `${process.cwd()}/${projectName}`;
-const fs = await import('fs');
-const path = await import('path');
+const projectName = args[1] || ".";
+const targetDir =
+  projectName === "." ? process.cwd() : `${process.cwd()}/${projectName}`;
+const fs = await import("fs");
+const path = await import("path");
 
 // Create directory if needed
-if (projectName !== '.') {
-    if (fs.existsSync(targetDir)) {
-        console.error(`Directory "${projectName}" already exists.`);
-        process.exit(1);
-    }
-    fs.mkdirSync(targetDir, { recursive: true });
+if (projectName !== ".") {
+  if (fs.existsSync(targetDir)) {
+    console.error(`Directory "${projectName}" already exists.`);
+    process.exit(1);
+  }
+  fs.mkdirSync(targetDir, { recursive: true });
 }
 
-const appDir = path.join(targetDir, 'app');
+const appDir = path.join(targetDir, "app");
 fs.mkdirSync(appDir, { recursive: true });
 
 // ─── Templates ─────────────────────────────────────────────────────────────────
 
 const files: Record<string, string> = {
-    'package.json': `{
-    "name": "${projectName === '.' ? 'my-app' : projectName.toLowerCase().replace(/[^a-z0-9-]/g, '-')}",
+  "package.json": `{
+    "name": "${projectName === "." ? "my-app" : projectName.toLowerCase().replace(/[^a-z0-9-]/g, "-")}",
     "version": "0.1.0",
     "type": "module",
     "scripts": {
@@ -127,7 +130,7 @@ const files: Record<string, string> = {
 }
 `,
 
-    '.gitignore': `# Dependencies
+  ".gitignore": `# Dependencies
 node_modules/
 
 # Build output
@@ -145,7 +148,7 @@ bun.lockb
 *.swo
 `,
 
-    'tsconfig.json': `{
+  "tsconfig.json": `{
     "compilerOptions": {
         "jsx": "react-jsx",
         "jsxImportSource": "tradjs/client",
@@ -165,13 +168,13 @@ bun.lockb
 }
 `,
 
-    'app/layout.tsx': `export default function RootLayout({ children }: { children: any }) {
+  "app/layout.tsx": `export default function RootLayout({ children }: { children: any }) {
     return (
         <html lang="en">
             <head>
                 <meta charSet="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <title>${projectName === '.' ? 'My App' : projectName}</title>
+                <title>${projectName === "." ? "My App" : projectName}</title>
                 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
             </head>
             <body>
@@ -182,11 +185,11 @@ bun.lockb
 }
 `,
 
-    'app/page.tsx': `export default function HomePage() {
+  "app/page.tsx": `export default function HomePage() {
     return (
         <div style={{ maxWidth: '640px', margin: '80px auto', padding: '0 24px', fontFamily: 'Inter, system-ui, sans-serif' }}>
             <h1 style={{ fontSize: '2.5rem', fontWeight: 700, marginBottom: '16px' }}>
-                🦊 ${projectName === '.' ? 'My App' : projectName}
+                🦊 ${projectName === "." ? "My App" : projectName}
             </h1>
             <p style={{ color: '#71717a', fontSize: '1.1rem', lineHeight: 1.6 }}>
                 Your TradJS app is running. Edit <code>app/page.tsx</code> to get started.
@@ -197,7 +200,7 @@ bun.lockb
 }
 `,
 
-    'app/page.client.tsx': `import { render } from 'tradjs/client';
+  "app/page.client.tsx": `import { render } from 'tradjs/client';
 
 function App() {
     return (
@@ -215,7 +218,7 @@ export default function mount() {
 }
 `,
 
-    'app/globals.css': `@import "tailwindcss";
+  "app/globals.css": `@import "tailwindcss";
 
 @theme {
     --color-background: #0a0a0f;
@@ -246,52 +249,52 @@ code {
 
 let written = 0;
 for (const [filePath, content] of Object.entries(files)) {
-    const fullPath = path.join(targetDir, filePath);
-    const dir = path.dirname(fullPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const fullPath = path.join(targetDir, filePath);
+  const dir = path.dirname(fullPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-    // Don't overwrite existing files
-    if (fs.existsSync(fullPath)) {
-        console.log(`  skip  ${filePath} (already exists)`);
-        continue;
-    }
-    fs.writeFileSync(fullPath, content);
-    console.log(`  create  ${filePath}`);
-    written++;
+  // Don't overwrite existing files
+  if (fs.existsSync(fullPath)) {
+    console.log(`  skip  ${filePath} (already exists)`);
+    continue;
+  }
+  fs.writeFileSync(fullPath, content);
+  console.log(`  create  ${filePath}`);
+  written++;
 }
 
 // ─── Done ──────────────────────────────────────────────────────────────────────
 
-const displayName = projectName === '.' ? 'current directory' : projectName;
+const displayName = projectName === "." ? "current directory" : projectName;
 console.log(`
 🦊 Project scaffolded in ${displayName} (${written} files)
 `);
 
 // Run bun install automatically
-console.log('  install  dependencies...');
-const { spawn } = await import('child_process');
+console.log("  install  dependencies...");
+const { spawn } = await import("child_process");
 
 await new Promise<void>((resolve, reject) => {
-    const install = spawn('bun', ['install'], {
-        cwd: targetDir,
-        stdio: 'inherit',
-        shell: true,
-    });
+  const install = spawn("bun", ["install"], {
+    cwd: targetDir,
+    stdio: "inherit",
+    shell: true,
+  });
 
-    install.on('close', (code) => {
-        if (code === 0) {
-            resolve();
-        } else {
-            reject(new Error(`bun install exited with code ${code}`));
-        }
-    });
+  install.on("close", (code) => {
+    if (code === 0) {
+      resolve();
+    } else {
+      reject(new Error(`bun install exited with code ${code}`));
+    }
+  });
 });
 
 console.log(`
 🦊 Done!
 
 Next steps:
-  ${projectName !== '.' ? `cd ${projectName}\n  ` : ''}bun run dev
+  ${projectName !== "." ? `cd ${projectName}\n  ` : ""}bun run dev
 
 Open http://localhost:3000 to see your app.
 `);

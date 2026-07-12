@@ -1,98 +1,103 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { JSDOM } from 'jsdom';
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { JSDOM } from "jsdom";
 
-describe('client navigation', () => {
-    let dom: JSDOM;
+describe("client navigation", () => {
+  let dom: JSDOM;
 
-    const originalGlobals = {
-        window: (globalThis as any).window,
-        document: (globalThis as any).document,
-        DOMParser: (globalThis as any).DOMParser,
-        HTMLElement: (globalThis as any).HTMLElement,
-        HTMLAnchorElement: (globalThis as any).HTMLAnchorElement,
-        Element: (globalThis as any).Element,
-        Text: (globalThis as any).Text,
-        Node: (globalThis as any).Node,
-        Event: (globalThis as any).Event,
-        MouseEvent: (globalThis as any).MouseEvent,
-        History: (globalThis as any).History,
-        location: (globalThis as any).location,
-        history: (globalThis as any).history,
-        fetch: (globalThis as any).fetch,
-    };
+  const originalGlobals = {
+    window: (globalThis as any).window,
+    document: (globalThis as any).document,
+    DOMParser: (globalThis as any).DOMParser,
+    HTMLElement: (globalThis as any).HTMLElement,
+    HTMLAnchorElement: (globalThis as any).HTMLAnchorElement,
+    Element: (globalThis as any).Element,
+    Text: (globalThis as any).Text,
+    Node: (globalThis as any).Node,
+    Event: (globalThis as any).Event,
+    MouseEvent: (globalThis as any).MouseEvent,
+    History: (globalThis as any).History,
+    location: (globalThis as any).location,
+    history: (globalThis as any).history,
+    fetch: (globalThis as any).fetch,
+  };
 
-    beforeEach(() => {
-        dom = new JSDOM(
-            '<!DOCTYPE html><html><head><title>Before</title><meta name="description" content="before"></head><body class="before"><main>Old</main></body></html>',
-            {
-                url: 'http://localhost/start',
-                runScripts: 'dangerously',
-                pretendToBeVisual: true,
-            },
-        );
+  beforeEach(() => {
+    dom = new JSDOM(
+      '<!DOCTYPE html><html><head><title>Before</title><meta name="description" content="before"></head><body class="before"><main>Old</main></body></html>',
+      {
+        url: "http://localhost/start",
+        runScripts: "dangerously",
+        pretendToBeVisual: true,
+      },
+    );
 
-        Object.assign(globalThis, {
-            window: dom.window,
-            document: dom.window.document,
-            DOMParser: dom.window.DOMParser,
-            HTMLElement: dom.window.HTMLElement,
-            HTMLAnchorElement: dom.window.HTMLAnchorElement,
-            Element: dom.window.Element,
-            Text: dom.window.Text,
-            Node: dom.window.Node,
-            Event: dom.window.Event,
-            MouseEvent: dom.window.MouseEvent,
-            History: dom.window.History,
-            location: dom.window.location,
-            history: dom.window.history,
-        });
-
-        (dom.window as any).scrollTo = () => {};
-        (globalThis as any).scrollTo = () => {};
-
-        (globalThis as any).fetch = async () => new Response(
-            '<!DOCTYPE html><html><head><title>After</title><meta name="description" content="after"></head><body class="after"><section id="new-page">Next</section><script>window.__navScriptRuns = (window.__navScriptRuns || 0) + 1;</script></body></html>',
-            {
-                status: 200,
-                headers: {
-                    'Content-Type': 'text/html',
-                },
-            },
-        );
+    Object.assign(globalThis, {
+      window: dom.window,
+      document: dom.window.document,
+      DOMParser: dom.window.DOMParser,
+      HTMLElement: dom.window.HTMLElement,
+      HTMLAnchorElement: dom.window.HTMLAnchorElement,
+      Element: dom.window.Element,
+      Text: dom.window.Text,
+      Node: dom.window.Node,
+      Event: dom.window.Event,
+      MouseEvent: dom.window.MouseEvent,
+      History: dom.window.History,
+      location: dom.window.location,
+      history: dom.window.history,
     });
 
-    afterEach(() => {
-        for (const [key, value] of Object.entries(originalGlobals)) {
-            if (value === undefined) {
-                delete (globalThis as any)[key];
-            } else {
-                (globalThis as any)[key] = value;
-            }
-        }
-    });
+    (dom.window as any).scrollTo = () => {};
+    (globalThis as any).scrollTo = () => {};
 
-    test('navigate replaces body, runs cleanups, and reactivates page scripts', async () => {
-        const cleanupCalls: string[] = [];
+    (globalThis as any).fetch = async () =>
+      new Response(
+        '<!DOCTYPE html><html><head><title>After</title><meta name="description" content="after"></head><body class="after"><section id="new-page">Next</section><script>window.__navScriptRuns = (window.__navScriptRuns || 0) + 1;</script></body></html>',
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "text/html",
+          },
+        },
+      );
+  });
 
-        (window as any).__tradjsCleanups__ = [
-            { cleanup: () => cleanupCalls.push('cleanup-ran') },
-        ];
+  afterEach(() => {
+    for (const [key, value] of Object.entries(originalGlobals)) {
+      if (value === undefined) {
+        delete (globalThis as any)[key];
+      } else {
+        (globalThis as any)[key] = value;
+      }
+    }
+  });
 
-        const { navigate } = await import('../src/client/render');
+  test("navigate replaces body, runs cleanups, and reactivates page scripts", async () => {
+    const cleanupCalls: string[] = [];
 
-        await navigate('/next?x=1');
+    (window as any).__tradjsCleanups__ = [
+      { cleanup: () => cleanupCalls.push("cleanup-ran") },
+    ];
 
-        expect(cleanupCalls).toEqual(['cleanup-ran']);
-        expect(document.body.className).toBe('after');
-        expect(document.querySelector('main')).toBeNull();
-        expect(document.querySelector('#new-page')?.textContent).toBe('Next');
+    const { navigate } = await import("../src/client/render");
 
-        expect(document.title).toBe('After');
-        expect(document.querySelector('meta[name="description"]')?.getAttribute('content')).toBe('after');
+    await navigate("/next?x=1");
 
-        expect((window as any).__navScriptRuns).toBe(1);
+    expect(cleanupCalls).toEqual(["cleanup-ran"]);
+    expect(document.body.className).toBe("after");
+    expect(document.querySelector("main")).toBeNull();
+    expect(document.querySelector("#new-page")?.textContent).toBe("Next");
 
-        expect(location.pathname).toBe('/next');
-        expect(location.search).toBe('?x=1');
-    });
+    expect(document.title).toBe("After");
+    expect(
+      document
+        .querySelector('meta[name="description"]')
+        ?.getAttribute("content"),
+    ).toBe("after");
+
+    expect((window as any).__navScriptRuns).toBe(1);
+
+    expect(location.pathname).toBe("/next");
+    expect(location.search).toBe("?x=1");
+  });
 });

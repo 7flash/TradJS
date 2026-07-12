@@ -1,5 +1,14 @@
 import { test, expect, describe, beforeEach, afterAll } from "bun:test";
-import { buildScript, buildStyle, buildAsset, buildClientScript, asset, serve, clearCaches, createAppRouter } from "../src/web";
+import {
+  buildScript,
+  buildStyle,
+  buildAsset,
+  buildClientScript,
+  asset,
+  serve,
+  clearCaches,
+  createAppRouter,
+} from "../src/web";
 import { imports } from "../src/server/imports";
 import { writeFileSync, mkdirSync, rmSync } from "fs";
 import path from "path";
@@ -19,7 +28,7 @@ beforeEach(() => {
   // Clean up and recreate test directory
   try {
     rmSync(testDir, { recursive: true, force: true });
-  } catch { }
+  } catch {}
   mkdirSync(testDir, { recursive: true });
 });
 
@@ -27,40 +36,48 @@ describe("imports", () => {
   test("should generate import map for simple dependencies", async () => {
     const packageJson = {
       dependencies: {
-        "react": "^18.2.0",
-        "react-dom": "^18.2.0"
-      }
+        react: "^18.2.0",
+        "react-dom": "^18.2.0",
+      },
     };
 
     const result = await imports([], packageJson);
 
     expect(result.imports).toBeDefined();
-    expect(result.imports["react"]).toMatch(/https:\/\/esm\.sh\/react@18\.2\.0/);
-    expect(result.imports["react-dom"]).toMatch(/https:\/\/esm\.sh\/react-dom@18\.2\.0/);
+    expect(result.imports["react"]).toMatch(
+      /https:\/\/esm\.sh\/react@18\.2\.0/,
+    );
+    expect(result.imports["react-dom"]).toMatch(
+      /https:\/\/esm\.sh\/react-dom@18\.2\.0/,
+    );
   });
 
   test("should handle scoped packages", async () => {
     const packageJson = {
       dependencies: {
-        "@tanstack/react-query": "^4.0.0"
-      }
+        "@tanstack/react-query": "^4.0.0",
+      },
     };
 
     const result = await imports([], packageJson);
 
-    expect(result.imports["@tanstack/react-query"]).toMatch(/https:\/\/esm\.sh\/@tanstack\/react-query@4\.0\.0/);
+    expect(result.imports["@tanstack/react-query"]).toMatch(
+      /https:\/\/esm\.sh\/@tanstack\/react-query@4\.0\.0/,
+    );
   });
 
   test("should handle subpaths", async () => {
     const packageJson = {
       dependencies: {
-        "react-dom": "^18.2.0"
-      }
+        "react-dom": "^18.2.0",
+      },
     };
 
     const result = await imports(["react-dom/client"], packageJson);
 
-    expect(result.imports["react-dom/client"]).toMatch(/https:\/\/esm\.sh\/react-dom@18\.2\.0\/client/);
+    expect(result.imports["react-dom/client"]).toMatch(
+      /https:\/\/esm\.sh\/react-dom@18\.2\.0\/client/,
+    );
   });
 
   test("should add dev query param in development", async () => {
@@ -69,8 +86,8 @@ describe("imports", () => {
 
     const packageJson = {
       dependencies: {
-        "react": "^18.2.0"
-      }
+        react: "^18.2.0",
+      },
     };
 
     const result = await imports([], packageJson);
@@ -83,9 +100,9 @@ describe("imports", () => {
   test("should handle peer dependencies", async () => {
     const packageJson = {
       dependencies: {
-        "react": "^18.2.0",
-        "react-dom": "^18.2.0"
-      }
+        react: "^18.2.0",
+        "react-dom": "^18.2.0",
+      },
     };
 
     const bunLock = {
@@ -95,11 +112,11 @@ describe("imports", () => {
           {},
           {
             peerDependencies: {
-              "react": "^18.2.0"
-            }
-          }
-        ]
-      }
+              react: "^18.2.0",
+            },
+          },
+        ],
+      },
     };
 
     const result = await imports([], packageJson, bunLock);
@@ -117,12 +134,17 @@ describe("buildScript", () => {
   test("should build JavaScript files", async () => {
     // Create a minimal package.json for the test
     const pkgPath = path.join(process.cwd(), "package.json");
-    const originalPkg = await Bun.file(pkgPath).exists() ? await Bun.file(pkgPath).text() : null;
+    const originalPkg = (await Bun.file(pkgPath).exists())
+      ? await Bun.file(pkgPath).text()
+      : null;
 
-    writeFileSync(pkgPath, JSON.stringify({
-      name: "test-project",
-      dependencies: {}
-    }));
+    writeFileSync(
+      pkgPath,
+      JSON.stringify({
+        name: "test-project",
+        dependencies: {},
+      }),
+    );
 
     const jsPath = path.join(testDir, "test.js");
     writeFileSync(jsPath, "console.log('test');");
@@ -139,15 +161,23 @@ describe("buildScript", () => {
 
   test("should build TypeScript files", async () => {
     const pkgPath = path.join(process.cwd(), "package.json");
-    const originalPkg = await Bun.file(pkgPath).exists() ? await Bun.file(pkgPath).text() : null;
+    const originalPkg = (await Bun.file(pkgPath).exists())
+      ? await Bun.file(pkgPath).text()
+      : null;
 
-    writeFileSync(pkgPath, JSON.stringify({
-      name: "test-project",
-      dependencies: {}
-    }));
+    writeFileSync(
+      pkgPath,
+      JSON.stringify({
+        name: "test-project",
+        dependencies: {},
+      }),
+    );
 
     const tsPath = path.join(testDir, "test.ts");
-    writeFileSync(tsPath, "const message: string = 'test'; console.log(message);");
+    writeFileSync(
+      tsPath,
+      "const message: string = 'test'; console.log(message);",
+    );
 
     const result = await buildScript(tsPath);
 
@@ -159,7 +189,9 @@ describe("buildScript", () => {
   });
 
   test("should throw error for non-existent file", async () => {
-    await expect(buildScript("/non/existent/file.js")).rejects.toThrow("Script not found");
+    await expect(buildScript("/non/existent/file.js")).rejects.toThrow(
+      "Script not found",
+    );
   });
 
   test("should throw error for empty path", async () => {
@@ -171,12 +203,17 @@ describe("buildScript", () => {
     process.env.NODE_ENV = "production";
 
     const pkgPath = path.join(process.cwd(), "package.json");
-    const originalPkg = await Bun.file(pkgPath).exists() ? await Bun.file(pkgPath).text() : null;
+    const originalPkg = (await Bun.file(pkgPath).exists())
+      ? await Bun.file(pkgPath).text()
+      : null;
 
-    writeFileSync(pkgPath, JSON.stringify({
-      name: "test-project",
-      dependencies: {}
-    }));
+    writeFileSync(
+      pkgPath,
+      JSON.stringify({
+        name: "test-project",
+        dependencies: {},
+      }),
+    );
 
     const jsPath = path.join(testDir, "cache-test.js");
     writeFileSync(jsPath, "console.log('cached');");
@@ -197,13 +234,18 @@ describe("buildScript", () => {
 describe("buildClientScript", () => {
   test("should only log actually stubbed installed server-only packages", async () => {
     const pkgPath = path.join(process.cwd(), "package.json");
-    const originalPkg = await Bun.file(pkgPath).exists() ? await Bun.file(pkgPath).text() : null;
+    const originalPkg = (await Bun.file(pkgPath).exists())
+      ? await Bun.file(pkgPath).text()
+      : null;
     const clientPath = path.join(testDir, "client.ts");
 
-    writeFileSync(pkgPath, JSON.stringify({
-      name: "test-project",
-      dependencies: {}
-    }));
+    writeFileSync(
+      pkgPath,
+      JSON.stringify({
+        name: "test-project",
+        dependencies: {},
+      }),
+    );
 
     writeFileSync(clientPath, "console.log('client');");
 
@@ -216,8 +258,8 @@ describe("buildClientScript", () => {
     try {
       await buildClientScript(clientPath);
 
-      const stubWarnings = warnings.filter(message =>
-        message.includes("Server-only packages stubbed for browser:")
+      const stubWarnings = warnings.filter((message) =>
+        message.includes("Server-only packages stubbed for browser:"),
       );
 
       expect(stubWarnings.length).toBe(0);
@@ -263,7 +305,9 @@ describe("buildStyle", () => {
   });
 
   test("should throw error for non-existent file", async () => {
-    await expect(buildStyle("/non/existent/file.css")).rejects.toThrow("Style not found");
+    await expect(buildStyle("/non/existent/file.css")).rejects.toThrow(
+      "Style not found",
+    );
   });
 
   test("should throw error for empty path", async () => {
@@ -291,15 +335,12 @@ describe("buildAsset", () => {
     const pngPath = path.join(testDir, "test.png");
     // Create a minimal PNG file
     const pngData = Buffer.from([
-      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-      0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-      0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-      0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
-      0x54, 0x08, 0xD7, 0x63, 0xF8, 0x0F, 0x00, 0x00,
-      0x01, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x13,
-      0x0A, 0x2E, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
-      0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+      0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+      0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00,
+      0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8, 0x0f, 0x00, 0x00,
+      0x01, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x13, 0x0a, 0x2e, 0xb4, 0x00,
+      0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     ]);
     writeFileSync(pngPath, pngData);
 
@@ -354,10 +395,12 @@ describe("buildAsset", () => {
     const fakeFile = {
       exists: async () => true,
       text: async () => "",
-      arrayBuffer: async () => new ArrayBuffer(0)
+      arrayBuffer: async () => new ArrayBuffer(0),
     } as any;
 
-    await expect(buildAsset(fakeFile)).rejects.toThrow("BunFile object must have a name property");
+    await expect(buildAsset(fakeFile)).rejects.toThrow(
+      "BunFile object must have a name property",
+    );
   });
 
   test("should cache in production", async () => {
@@ -384,7 +427,9 @@ describe("asset (legacy)", () => {
 
     const consoleWarnSpy = console.warn;
     let warnCalled = false;
-    console.warn = () => { warnCalled = true; };
+    console.warn = () => {
+      warnCalled = true;
+    };
 
     const result = await asset(cssPath);
 
@@ -396,19 +441,26 @@ describe("asset (legacy)", () => {
 
   test("should handle string paths for JS", async () => {
     const pkgPath = path.join(process.cwd(), "package.json");
-    const originalPkg = await Bun.file(pkgPath).exists() ? await Bun.file(pkgPath).text() : null;
+    const originalPkg = (await Bun.file(pkgPath).exists())
+      ? await Bun.file(pkgPath).text()
+      : null;
 
-    writeFileSync(pkgPath, JSON.stringify({
-      name: "test-project",
-      dependencies: {}
-    }));
+    writeFileSync(
+      pkgPath,
+      JSON.stringify({
+        name: "test-project",
+        dependencies: {},
+      }),
+    );
 
     const jsPath = path.join(testDir, "legacy.js");
     writeFileSync(jsPath, "console.log('legacy');");
 
     const consoleWarnSpy = console.warn;
     let warnCalled = false;
-    console.warn = () => { warnCalled = true; };
+    console.warn = () => {
+      warnCalled = true;
+    };
 
     const result = await asset(jsPath);
 
@@ -430,7 +482,9 @@ describe("asset (legacy)", () => {
 
     const consoleWarnSpy = console.warn;
     let warnCalled = false;
-    console.warn = () => { warnCalled = true; };
+    console.warn = () => {
+      warnCalled = true;
+    };
 
     const result = await asset(file);
 
@@ -446,16 +500,22 @@ describe("serve", () => {
     const appDir = path.join(testDir, "app");
     mkdirSync(appDir, { recursive: true });
 
-    writeFileSync(path.join(appDir, "layout.tsx"), `
+    writeFileSync(
+      path.join(appDir, "layout.tsx"),
+      `
       export default function RootLayout({ children }: { children: any }) {
         return <html><head><title>Test App</title></head><body><main>{children}</main></body></html>;
       }
-    `);
-    writeFileSync(path.join(appDir, "page.tsx"), `
+    `,
+    );
+    writeFileSync(
+      path.join(appDir, "page.tsx"),
+      `
       export default function HomePage() {
         return <h1>Options Serve</h1>;
       }
-    `);
+    `,
+    );
 
     const server = await serve({ appDir, port: getRandomPort() });
 
@@ -472,20 +532,29 @@ describe("serve", () => {
     const appDir = path.join(testDir, "stream-app");
     mkdirSync(appDir, { recursive: true });
 
-    writeFileSync(path.join(appDir, "layout.tsx"), `
+    writeFileSync(
+      path.join(appDir, "layout.tsx"),
+      `
       export default function RootLayout({ children }: { children: any }) {
         return <html><head><title>Stream Test</title></head><body><main>{children}</main></body></html>;
       }
-    `);
-    writeFileSync(path.join(appDir, "page.tsx"), `
+    `,
+    );
+    writeFileSync(
+      path.join(appDir, "page.tsx"),
+      `
       export default function StreamPage() {
         return <section>Body Chunk</section>;
       }
-    `);
+    `,
+    );
 
     const handler = createAppRouter({ appDir });
     const measure = async (_label: string, fn: () => any) => await fn();
-    const response = await handler(new Request("http://tradjs.test/"), measure as any) as Response;
+    const response = (await handler(
+      new Request("http://tradjs.test/"),
+      measure as any,
+    )) as Response;
 
     expect(response.body).toBeTruthy();
 
@@ -509,16 +578,22 @@ describe("serve", () => {
     const rootDir = path.join(testDir, "root-app");
     mkdirSync(rootDir, { recursive: true });
 
-    writeFileSync(path.join(rootDir, "layout.tsx"), `
+    writeFileSync(
+      path.join(rootDir, "layout.tsx"),
+      `
       export default function RootLayout({ children }: { children: any }) {
         return <html><head><title>Root App</title></head><body><main>{children}</main></body></html>;
       }
-    `);
-    writeFileSync(path.join(rootDir, "page.tsx"), `
+    `,
+    );
+    writeFileSync(
+      path.join(rootDir, "page.tsx"),
+      `
       export default function RootPage() {
         return <h1>Root Fallback</h1>;
       }
-    `);
+    `,
+    );
 
     const originalCwd = process.cwd();
     process.chdir(rootDir);
@@ -541,8 +616,8 @@ describe("serve", () => {
       port: busyPort,
       hostname: "127.0.0.1",
       socket: {
-        close() { },
-        data() { },
+        close() {},
+        data() {},
       },
     });
 
@@ -560,13 +635,15 @@ describe("serve", () => {
         port: 3000,
         hostname: "127.0.0.1",
         socket: {
-          close() { },
-          data() { },
+          close() {},
+          data() {},
         },
       });
     } catch (error: any) {
       if (error?.code === "EACCES") {
-        console.log("⏭️  Skipping port-3000 fallback test because this environment denies binding 127.0.0.1:3000");
+        console.log(
+          "⏭️  Skipping port-3000 fallback test because this environment denies binding 127.0.0.1:3000",
+        );
         return;
       }
       throw error;
@@ -603,8 +680,8 @@ describe("serve", () => {
       port: startPort,
       hostname: "127.0.0.1",
       socket: {
-        close() { },
-        data() { },
+        close() {},
+        data() {},
       },
     });
 
@@ -643,17 +720,20 @@ describe("serve", () => {
     const text = await response.text();
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(response.headers.get("content-type")).toBe(
+      "text/html; charset=utf-8",
+    );
     expect(text).toBe("<h1>Hello World</h1>");
 
     server.stop();
   });
 
   test("should handle Response objects", async () => {
-    const handler = () => new Response("Custom Response", {
-      status: 201,
-      headers: { "X-Custom": "Header" }
-    });
+    const handler = () =>
+      new Response("Custom Response", {
+        status: 201,
+        headers: { "X-Custom": "Header" },
+      });
     const server = await serve(handler, { port: getRandomPort() });
 
     const response = await fetch(`http://localhost:${server.port}/`);
@@ -738,7 +818,7 @@ describe("serve", () => {
 
     const customId = "custom-123";
     const response = await fetch(`http://localhost:${server.port}/`, {
-      headers: { "X-Request-ID": customId }
+      headers: { "X-Request-ID": customId },
     });
 
     expect(response.headers.get("x-request-id")).toBe(customId);
@@ -765,14 +845,15 @@ describe("serve", () => {
     const handler = () => "OK";
     const server = await serve(handler, { port: getRandomPort() });
 
-    const response = await fetch(`http://localhost:${server.port}/__melina_hmr`);
+    const response = await fetch(
+      `http://localhost:${server.port}/__melina_hmr`,
+    );
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("OK");
 
     server.stop();
   });
-
 });
 
 describe("getContentType", () => {
@@ -785,7 +866,10 @@ describe("getContentType", () => {
       { name: "font.woff2", expectedTypes: ["font/woff2"] },
       { name: "data.json", expectedTypes: ["application/json"] },
       { name: "video.mp4", expectedTypes: ["video/mp4"] },
-      { name: "unknown.xyz", expectedTypes: ["application/octet-stream", "chemical/x-xyz"] }
+      {
+        name: "unknown.xyz",
+        expectedTypes: ["application/octet-stream", "chemical/x-xyz"],
+      },
     ];
 
     for (const { name, expectedTypes } of testFiles) {
@@ -798,10 +882,16 @@ describe("getContentType", () => {
       const handler = () => "Not found";
       const server = await serve(handler, { port: getRandomPort() });
 
-      const response = await fetch(`http://localhost:${server.port}${assetPath}`);
+      const response = await fetch(
+        `http://localhost:${server.port}${assetPath}`,
+      );
 
       const contentType = response.headers.get("content-type") || "";
-      expect(expectedTypes.some((expectedType) => contentType.includes(expectedType))).toBe(true);
+      expect(
+        expectedTypes.some((expectedType) =>
+          contentType.includes(expectedType),
+        ),
+      ).toBe(true);
 
       server.stop();
     }
@@ -812,5 +902,5 @@ describe("getContentType", () => {
 afterAll(() => {
   try {
     rmSync(testDir, { recursive: true, force: true });
-  } catch { }
+  } catch {}
 });

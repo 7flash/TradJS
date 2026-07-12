@@ -1,13 +1,13 @@
 /**
  * TradJS — Web Framework Entry Point
- * 
+ *
  * This module re-exports everything from the server sub-modules.
  * The actual implementation lives in src/server/.
- * 
+ *
  * @module tradjs/web
  */
 
-console.log('🦊 [tradjs] Ready');
+console.log("🦊 [tradjs] Ready");
 
 // Re-export all server functionality
 export {

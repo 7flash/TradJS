@@ -2,13 +2,15 @@
  * Middleware for the /features/middleware route.
  * Runs before the page renders — can inspect request, add headers, or block access.
  */
-export default async function middleware(req: Request): Promise<Response | void> {
-    const url = new URL(req.url);
+export default async function middleware(
+  req: Request,
+): Promise<Response | void> {
+  const url = new URL(req.url);
 
-    // Example: block access if ?blocked is present
-    if (url.searchParams.has('blocked')) {
-        return new Response(
-            `<!DOCTYPE html>
+  // Example: block access if ?blocked is present
+  if (url.searchParams.has("blocked")) {
+    return new Response(
+      `<!DOCTYPE html>
 <html lang="en"><head><meta charSet="utf-8"><title>403 Blocked</title></head>
 <body style="font-family:system-ui;background:#0a0a0a;color:#e5e5e5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <div style="text-align:center;max-width:500px">
@@ -20,17 +22,17 @@ by returning a Response before the page had a chance to render.
 </p>
 <a href="/features/middleware" style="color:#6366f1;text-decoration:underline">← Go back (without ?blocked)</a>
 </div></body></html>`,
-            {
-                status: 403,
-                headers: {
-                    'Content-Type': 'text/html',
-                    'X-Middleware': 'blocked',
-                },
-            }
-        );
-    }
+      {
+        status: 403,
+        headers: {
+          "Content-Type": "text/html",
+          "X-Middleware": "blocked",
+        },
+      },
+    );
+  }
 
-    // Example: add a custom header (doesn't block, just enriches)
-    // NOTE: returning void means "continue to the page"
-    console.log(`[middleware] ${req.method} ${url.pathname} — allowed through`);
+  // Example: add a custom header (doesn't block, just enriches)
+  // NOTE: returning void means "continue to the page"
+  console.log(`[middleware] ${req.method} ${url.pathname} — allowed through`);
 }
