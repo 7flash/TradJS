@@ -69,7 +69,10 @@ export async function serve(
     unix = options.unix;
   } else {
     const bunPort = process.env.BUN_PORT;
-    const cliArg = process.argv[2];
+    const rawCliArg = process.argv[2];
+    // `tradjs serve` has already been parsed by the framework CLI. The word
+    // "serve" is a command token, not an implicit Unix socket path.
+    const cliArg = rawCliArg === "serve" ? undefined : rawCliArg;
     const isFlag = cliArg?.startsWith("-");
 
     if (bunPort) {

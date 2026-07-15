@@ -674,6 +674,41 @@ describe("serve", () => {
     }
   });
 
+  test("should not treat the tradjs serve command as a unix socket", async () => {
+    const originalArgv = [...process.argv];
+    const originalBunPort = process.env.BUN_PORT;
+    const originalCwd = process.cwd();
+
+    delete process.env.BUN_PORT;
+    process.argv = [originalArgv[0], originalArgv[1], "serve"];
+    process.chdir(testDir);
+
+    let server: any;
+    try {
+      server = await serve(() => "OK");
+
+      expect(server.port).toBeGreaterThanOrEqual(3000);
+
+      const response = await fetch(`http://localhost:${server.port}/`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("OK");
+    } finally {
+      server?.stop();
+      process.chdir(originalCwd);
+      process.argv = originalArgv;
+
+      if (originalBunPort === undefined) {
+        delete process.env.BUN_PORT;
+      } else {
+        process.env.BUN_PORT = originalBunPort;
+      }
+
+      // Cleanup in case the regression reappears and creates a socket named
+      // "serve" before the assertion fails.
+      rmSync(path.join(testDir, "serve"), { force: true });
+    }
+  });
+
   test("should treat BUN_PORT as implicit and fall forward when busy", async () => {
     const startPort = getRandomPort();
     const listener = Bun.listen({
