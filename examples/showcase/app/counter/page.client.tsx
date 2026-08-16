@@ -110,17 +110,10 @@ export default function mount() {
             color: "var(--color-muted)",
           }}
         >
-          Navigate away and back to see a fresh mount time (cleanup runs on
-          leave).
+          This timestamp belongs to the current browser document.
         </div>
       </div>,
       lifecycleRoot!,
     );
   }
-
-  return () => {
-    count = 0;
-    render(null, root);
-    if (lifecycleRoot) render(null, lifecycleRoot);
-  };
 }

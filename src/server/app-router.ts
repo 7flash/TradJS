@@ -35,6 +35,22 @@ import type {
 
 const isDev = process.env.NODE_ENV !== "production";
 const STREAM_SLOT_MARKUP = "<tradjs-stream-slot></tradjs-stream-slot>";
+const VIEW_TRANSITION_STYLE =
+  "<style data-tradjs-view-transitions>@view-transition { navigation: auto; } @media (prefers-reduced-motion: reduce) { @view-transition { navigation: none; } }</style>";
+
+function injectViewTransitions(html: string, enabled: boolean): string {
+  if (!enabled || html.includes("data-tradjs-view-transitions")) return html;
+  if (html.includes("</head>")) {
+    return html.replace("</head>", `${VIEW_TRANSITION_STYLE}</head>`);
+  }
+  if (html.startsWith("<!DOCTYPE html>")) {
+    return html.replace(
+      "<!DOCTYPE html>",
+      `<!DOCTYPE html>${VIEW_TRANSITION_STYLE}`,
+    );
+  }
+  return `${VIEW_TRANSITION_STYLE}${html}`;
+}
 
 function applyRouteBodyAttributes(html: string, routePattern: string): string {
   if (!html.includes("<body")) return html;
@@ -75,6 +91,7 @@ export async function frontendApp(
     stylePath,
     title = "Frontend App",
     viewport = "width=device-width, initial-scale=1",
+    viewTransitions = true,
     rebuild = true,
     serverData = {},
     additionalAssets = [],
@@ -142,7 +159,8 @@ export async function frontendApp(
     .map((script) => `<script>${script}</script>`)
     .join("\n");
 
-  return dedent`
+  return injectViewTransitions(
+    dedent`
     <!DOCTYPE html>
     <html>
       <head>
@@ -164,7 +182,9 @@ export async function frontendApp(
         <script src="${scriptVirtualPath}" type="module"></script>
       </body>
     </html>
-  `;
+  `,
+    viewTransitions,
+  );
 }
 
 // ─── Page Renderer ──────────────────────────────────────────────────────────────
@@ -182,6 +202,7 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
     params = {},
     props = {},
     viewport = "width=device-width, initial-scale=1",
+    viewTransitions = true,
     meta = [],
   } = options;
 
@@ -230,7 +251,8 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
     .map((m) => `<meta name="${m.name}" content="${m.content}">`)
     .join("\n");
 
-  return dedent`
+  return injectViewTransitions(
+    dedent`
     <!DOCTYPE html>
     <html>
       <head>
@@ -249,7 +271,9 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
         ${scriptVirtualPath ? `<script src="${scriptVirtualPath}" type="module"></script>` : ""}
       </body>
     </html>
-  `;
+  `,
+    viewTransitions,
+  );
 }
 
 // ─── App Router ─────────────────────────────────────────────────────────────────
@@ -272,6 +296,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
   const {
     appDir = path.join(process.cwd(), "app"),
     defaultTitle = "TradJS App",
+    viewTransitions = true,
   } = options;
 
   const routes = discoverRoutes(appDir);
@@ -353,7 +378,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
 
           fullHtml = applyRouteBodyAttributes(fullHtml, route.pattern);
 
-          return fullHtml;
+          return injectViewTransitions(fullHtml, viewTransitions);
         });
         if (count > 0) console.log(`⚡ SSG: Pre-rendered ${count} pages`);
       } catch (e: any) {
@@ -369,7 +394,11 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
     const match = matchRoute(pathname, routes);
 
     if (!match) {
-      return new Response("404 - Not Found", {
+      const notFoundHtml = injectViewTransitions(
+        `<!DOCTYPE html><html><head><meta charset="utf-8"><title>404 - Not Found</title></head><body><h1>404 - Not Found</h1></body></html>`,
+        viewTransitions,
+      );
+      return new Response(notFoundHtml, {
         status: 404,
         headers: { "Content-Type": "text/html" },
       });
@@ -518,11 +547,10 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       if (clientScriptUrls.length > 0) {
         const paramsJson = JSON.stringify(match.params);
         const bootstrapLines = clientScriptUrls.map(({ url, type }) => {
-          return `  import('${url}').then(m => { if (typeof m.default === 'function') { const cleanup = m.default({ params: window.__TRADJS_PARAMS__ }); if (typeof cleanup === 'function') { window.__tradjsCleanups__ = window.__tradjsCleanups__ || []; window.__tradjsCleanups__.push({ type: '${type}', cleanup }); } } }).catch(e => console.error('[tradjs] Failed to mount ${type} script:', e));`;
+          return `import('${url}').then(m => { if (typeof m.default === 'function') m.default({ params }); }).catch(e => console.error('[tradjs] Failed to mount ${type} script:', e));`;
         });
         clientScriptTags.push(
-          `<script>window.__TRADJS_PARAMS__ = ${paramsJson};</script>`,
-          `<script type="module">\n${bootstrapLines.join("\n")}\n</script>`,
+          `<script type="module">\nconst params = ${paramsJson};\n${bootstrapLines.join("\n")}\n</script>`,
         );
       }
 
@@ -598,6 +626,8 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       if (importMapTag) {
         shellHtml = shellHtml.replace("</head>", `${importMapTag}</head>`);
       }
+
+      shellHtml = injectViewTransitions(shellHtml, viewTransitions);
 
       const slotIndex = shellHtml.indexOf(STREAM_SLOT_MARKUP);
 
@@ -682,6 +712,11 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
               }
             }
 
+            fullErrorHtml = injectViewTransitions(
+              fullErrorHtml,
+              viewTransitions,
+            );
+
             return new Response(fullErrorHtml, {
               status: 500,
               headers: { "Content-Type": "text/html" },
@@ -695,9 +730,11 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
 
       // Generic fallback error page
       return new Response(
-        `
+        injectViewTransitions(
+          `
         <!DOCTYPE html>
         <html>
+          <head><meta charset="utf-8"><title>500 - Internal Server Error</title></head>
           <body>
             <h1>500 - Internal Server Error</h1>
             <pre>${isDev ? errorStack : "An error occurred"}</pre>
@@ -705,6 +742,8 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
           </body>
         </html>
       `,
+          viewTransitions,
+        ),
         {
           status: 500,
           headers: { "Content-Type": "text/html" },

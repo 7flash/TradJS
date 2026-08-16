@@ -12,6 +12,7 @@
  *
  * Server code (src/web.ts) imports renderToString from 'tradjs/ssr' or '../ssr'.
  * Client code (page.client.tsx) imports { render } from 'tradjs/client'.
+ * Page navigation is browser-native; this package does not install a client router.
  */
 
 // Types + Fragment symbol
@@ -23,15 +24,8 @@ export { createElement, jsx, jsxs, jsxDEV } from "./render";
 export { createElement as h } from "./render";
 
 // Client-side renderer
-export {
-  render,
-  navigate,
-  Link,
-  memo,
-  setReconciler,
-  getReconciler,
-} from "./render";
-export type { Fiber, LinkProps, RenderOptions } from "./render";
+export { render, memo, setReconciler, getReconciler } from "./render";
+export type { Fiber, RenderOptions } from "./render";
 
 // Reconciler strategies (for advanced usage)
 export { sequentialReconciler } from "./reconcilers/sequential";

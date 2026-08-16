@@ -111,11 +111,4 @@ export default function mount() {
   if (!rootEl) return;
 
   paint();
-
-  return () => {
-    if (rootEl) render(null, rootEl);
-    rootEl = null;
-    mode = "close";
-    claimed = false;
-  };
 }

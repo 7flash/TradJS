@@ -118,11 +118,4 @@ export default function mount() {
   es.onerror = () => {
     render(<Status connected={false} count={events.length} />, statusRoot);
   };
-
-  return () => {
-    es.close();
-    render(null, statusRoot);
-    render(null, eventsRoot);
-    render(null, statsRoot);
-  };
 }

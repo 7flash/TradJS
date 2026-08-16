@@ -76,14 +76,15 @@ export default function HomePage() {
       <div className="demo-card" style={{ marginTop: "32px" }}>
         <h3 className="demo-card-title">Architecture</h3>
         <p className="demo-card-description">
-          Melina uses a <strong>Single Root SSR + Vanilla Lifecycle</strong>{" "}
-          model. Pages render on the server as JSX → HTML. Client interactivity
-          is added via mount scripts (<code>page.client.tsx</code>) that use a
-          ~2KB VDOM runtime with pluggable reconcilers.
+          TradJS is server-first. Pages render as HTML, normal links perform
+          native document navigation, and cross-document View Transitions are
+          enabled by default. Client mount scripts add interactivity only to the
+          current document.
         </p>
-        <div className="code-block">{`Server:  page.tsx      → renderToString() → HTML response
-Client:  page.client.tsx → mount()         → render(vnode, el)
-Layout:  layout.client.tsx                 → persistent across navigations`}</div>
+        <div className="code-block">{`Server:     page.tsx        → renderToString() → HTML document
+Navigation: <a href="...">  → browser navigation → cross-document transition
+Client:     page.client.tsx → mount() → render(vnode, el)
+Lifetime:   browser owns document/module lifetime, history, and BFCache`}</div>
       </div>
     </div>
   );

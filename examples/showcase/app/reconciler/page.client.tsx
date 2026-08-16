@@ -692,9 +692,4 @@ export default function mount() {
       renderPlayground();
     });
   });
-
-  return () => {
-    playgroundList!.innerHTML = "";
-    playgroundStats!.innerHTML = "";
-  };
 }

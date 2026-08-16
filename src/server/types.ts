@@ -26,6 +26,8 @@ export interface FrontendAppOptions {
   stylePath?: string;
   title?: string;
   viewport?: string;
+  /** Enable same-origin cross-document View Transitions (default: true). */
+  viewTransitions?: boolean;
   rebuild?: boolean;
   serverData?: any;
   additionalAssets?: Array<{ path: string; type: string }>;
@@ -49,6 +51,8 @@ export interface RenderPageOptions {
   props?: Record<string, any>;
   /** Viewport meta tag */
   viewport?: string;
+  /** Enable same-origin cross-document View Transitions (default: true). */
+  viewTransitions?: boolean;
   /** Additional meta tags */
   meta?: Array<{ name: string; content: string }>;
 }
@@ -60,4 +64,6 @@ export interface AppRouterOptions {
   defaultTitle?: string;
   /** Path to global CSS file */
   globalCss?: string;
+  /** Enable same-origin cross-document View Transitions (default: true). */
+  viewTransitions?: boolean;
 }

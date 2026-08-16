@@ -39,3 +39,6 @@ bun.lock
 *.log
 
 *.html
+
+package-lock.json
+bun.lock

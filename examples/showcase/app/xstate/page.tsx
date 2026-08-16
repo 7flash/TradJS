@@ -79,7 +79,6 @@ export default function mount() {
     });
 
     actor.start();
-    return () => actor.stop();  // cleanup on navigate
 }`}</div>
       </div>
     </div>

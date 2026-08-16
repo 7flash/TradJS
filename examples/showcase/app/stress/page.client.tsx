@@ -412,9 +412,4 @@ export default function mount() {
         .querySelectorAll("#stress-controls .btn")
         .forEach((b) => b.classList.remove("disabled"));
     });
-
-  return () => {
-    render(null, summaryRoot);
-    render(null, logRoot);
-  };
 }

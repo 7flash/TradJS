@@ -44,8 +44,9 @@ export default function CounterPage() {
       <div className="demo-card">
         <h3 className="demo-card-title">⏱️ Lifecycle</h3>
         <p className="demo-card-description">
-          Mount scripts export a default function that returns a cleanup
-          function. Navigate away and back to observe the mount/cleanup cycle.
+          Mount scripts follow the normal browser document lifecycle. A new
+          document gets a new module graph; browser Back/Forward may restore a
+          previous document from BFCache instead of rebuilding it.
         </p>
         <div id="lifecycle-root" className="result-box">
           <span style={{ color: "var(--color-muted)" }}>
@@ -77,7 +78,6 @@ function update() { render(<Counter />, root); }
 export default function mount() {
     const root = document.getElementById('counter-root');
     update();
-    return () => { render(null, root); };  // cleanup
 }`}</div>
       </div>
     </div>

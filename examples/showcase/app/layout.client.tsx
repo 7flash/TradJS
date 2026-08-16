@@ -7,6 +7,4 @@ export default function mount() {
     const isActive = href === "/" ? path === "/" : path.startsWith(href);
     link.classList.toggle("active", isActive);
   });
-
-  return () => {};
 }

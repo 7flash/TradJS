@@ -214,7 +214,6 @@ export default function mount() {
     const root = document.getElementById('app-root');
     if (!root) return;
     render(<App />, root);
-    return () => render(null, root);
 }
 `,
 

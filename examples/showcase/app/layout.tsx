@@ -34,7 +34,10 @@ export default function RootLayout({ children }: { children: any }) {
       <body>
         <div className="app-shell">
           {/* Sidebar */}
-          <aside className="sidebar">
+          <aside
+            className="sidebar"
+            style={{ viewTransitionName: "showcase-sidebar" }}
+          >
             <div className="sidebar-header">
               <div className="sidebar-logo">
                 🦊 <span>Melina.js</span>
@@ -85,7 +88,12 @@ export default function RootLayout({ children }: { children: any }) {
           </aside>
 
           {/* Main Content */}
-          <main className="main-content">{children}</main>
+          <main
+            className="main-content"
+            style={{ viewTransitionName: "showcase-content" }}
+          >
+            {children}
+          </main>
         </div>
       </body>
     </html>

@@ -600,114 +600,6 @@ function getNextSibling(fiber: Fiber, parentNode: Node): Node | null {
   return nodes[nodes.length - 1].nextSibling;
 }
 
-// ─── Navigation ────────────────────────────────────────────────────────────────
-
-export interface NavigateOptions {
-  replace?: boolean;
-  scroll?: boolean;
-  state?: unknown;
-}
-
-export async function navigate(
-  href: string,
-  options: NavigateOptions | boolean = {},
-): Promise<void> {
-  if (typeof window === "undefined") return;
-  try {
-    const opts: NavigateOptions =
-      typeof options === "boolean" ? { replace: options } : options;
-    const resolvedHref = new URL(href, window.location.href).toString();
-    const response = await fetch(resolvedHref);
-    const html = await response.text();
-    const newDoc = new DOMParser().parseFromString(html, "text/html");
-
-    runPageCleanups();
-    syncHead(newDoc);
-    syncElementAttributes(document.documentElement, newDoc.documentElement);
-    syncElementAttributes(document.body, newDoc.body);
-
-    const fragment = document.createDocumentFragment();
-    while (newDoc.body.firstChild)
-      fragment.appendChild(document.adoptNode(newDoc.body.firstChild));
-
-    if (opts.replace) {
-      window.history.replaceState(opts.state ?? {}, "", resolvedHref);
-    } else {
-      window.history.pushState(opts.state ?? {}, "", resolvedHref);
-    }
-    const update = () => {
-      document.body.replaceChildren(fragment);
-      if (opts.scroll !== false) window.scrollTo(0, 0);
-    };
-
-    if (document.startViewTransition) {
-      // @ts-ignore
-      await document.startViewTransition(update).finished;
-    } else {
-      update();
-    }
-
-    reactivateScripts(document.body);
-  } catch (e) {
-    window.location.href = href;
-  }
-}
-
-function runPageCleanups(): void {
-  const cleanups = Array.isArray((window as any).__tradjsCleanups__)
-    ? (window as any).__tradjsCleanups__
-    : [];
-
-  for (const entry of cleanups) {
-    if (!entry || typeof entry.cleanup !== "function") continue;
-    try {
-      entry.cleanup();
-    } catch {
-      // Ignore cleanup failures during navigation.
-    }
-  }
-
-  (window as any).__tradjsCleanups__ = [];
-}
-
-function syncHead(newDoc: Document): void {
-  document.title = newDoc.title;
-  replaceHeadNodes("meta[name], meta[property], meta[content]", newDoc);
-  replaceHeadNodes('link[rel="stylesheet"]', newDoc);
-  replaceHeadNodes("style", newDoc);
-  replaceHeadNodes('script[type="importmap"]', newDoc);
-}
-
-function replaceHeadNodes(selector: string, newDoc: Document): void {
-  for (const node of Array.from(document.head.querySelectorAll(selector))) {
-    node.remove();
-  }
-  for (const node of Array.from(newDoc.head.querySelectorAll(selector))) {
-    document.head.appendChild(node.cloneNode(true));
-  }
-}
-
-function syncElementAttributes(target: HTMLElement, source: HTMLElement): void {
-  for (const attr of Array.from(target.attributes)) {
-    if (!source.hasAttribute(attr.name)) target.removeAttribute(attr.name);
-  }
-  for (const attr of Array.from(source.attributes)) {
-    target.setAttribute(attr.name, attr.value);
-  }
-}
-
-function reactivateScripts(root: ParentNode): void {
-  const scripts = Array.from(root.querySelectorAll("script"));
-  for (const oldScript of scripts) {
-    const newScript = document.createElement("script");
-    for (const attr of Array.from(oldScript.attributes)) {
-      newScript.setAttribute(attr.name, attr.value);
-    }
-    if (oldScript.textContent) newScript.textContent = oldScript.textContent;
-    oldScript.parentNode?.replaceChild(newScript, oldScript);
-  }
-}
-
 // ─── Explicit Component Memoization ────────────────────────────────────────────
 
 export function memo<P extends Record<string, any>>(
@@ -726,25 +618,6 @@ export function memo<P extends Record<string, any>>(
   (MemoComponent as any).__tradjsMemoCompare = compare;
 
   return MemoComponent as typeof Component;
-}
-
-export interface LinkProps extends Props {
-  href: string;
-}
-export function Link({ href, children, ...rest }: LinkProps): VNode {
-  return createElement(
-    "a",
-    {
-      href,
-      onClick: (e: MouseEvent) => {
-        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-        e.preventDefault();
-        navigate(href);
-      },
-      ...rest,
-    },
-    ...(Array.isArray(children) ? children : [children]),
-  );
 }
 
 // ─── createElement ─────────────────────────────────────────────────────────────
@@ -773,35 +646,3 @@ export function jsx(type: any, props: any, key?: any): VNode {
 }
 export const jsxs = jsx;
 export const jsxDEV = jsx;
-
-// ─── Auto-init for link interception ───────────────────────────────────────────
-// Guard: tradjs/client may be bundled into multiple scripts (layout + page).
-// Without this guard, each bundle registers its own click interceptor,
-// causing duplicate fetches on every navigation.
-
-if (typeof window !== "undefined" && !(window as any).__tradjsNavInit__) {
-  (window as any).__tradjsNavInit__ = true;
-
-  document.addEventListener("click", (e) => {
-    const link = (e.target as Element).closest("a[href]") as HTMLAnchorElement;
-    if (!link || link.target || !link.href.startsWith(window.location.origin))
-      return;
-    if (
-      e.defaultPrevented ||
-      e.metaKey ||
-      e.ctrlKey ||
-      e.shiftKey ||
-      e.altKey ||
-      e.button !== 0
-    )
-      return;
-    if (link.hasAttribute("data-no-intercept") || link.hasAttribute("download"))
-      return;
-    e.preventDefault();
-    navigate(link.href);
-  });
-
-  window.addEventListener("popstate", () => {
-    navigate(window.location.href, { replace: true, scroll: false });
-  });
-}

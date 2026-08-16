@@ -164,11 +164,4 @@ export default function mount() {
     });
     counterActor.start();
   }
-
-  return () => {
-    trafficActor.stop();
-    counterActor.stop();
-    if (trafficRoot) render(null, trafficRoot);
-    if (counterRoot) render(null, counterRoot);
-  };
 }

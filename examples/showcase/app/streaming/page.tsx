@@ -25,7 +25,8 @@ export default function StreamingPage() {
         <h3 className="demo-card-title">📡 Live Stream</h3>
         <p className="demo-card-description">
           Connected to <code className="code-inline">/api/stream</code> via
-          EventSource. Cleanup runs on navigation (closes connection).
+          EventSource. Navigation uses the browser's normal page lifecycle;
+          TradJS does not simulate route cleanup or resurrect scripts.
         </p>
         <div id="stream-status" style={{ marginBottom: "12px" }}>
           <span className="stream-status">
@@ -88,7 +89,6 @@ export default function mount() {
         const data = JSON.parse(ev.data);
         render(<Events events={[...events, data]} />, root);
     };
-    return () => es.close();  // cleanup!
 }`}</div>
       </div>
     </div>

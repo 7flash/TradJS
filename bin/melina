@@ -57,9 +57,9 @@ export default function HomePage() {
 }
 
 function pageClientTsx() {
-    return `export default function mount(): () => void {
+    return `export default function mount(): void {
   const root = document.getElementById('counter-root');
-  if (!root) return () => {};
+  if (!root) return;
 
   let count = 0;
 
@@ -78,10 +78,6 @@ function pageClientTsx() {
   >Count: 0</button>;
 
   root.appendChild(btn);
-
-  return () => {
-    root.innerHTML = '';
-  };
 }
 `;
 }
