@@ -31,6 +31,12 @@ import type {
 import { sequentialReconciler } from "./reconcilers/sequential";
 import { keyedReconciler } from "./reconcilers/keyed";
 import { replaceReconciler } from "./reconcilers/replace";
+import {
+  assignElementStyle,
+  createDomElement,
+  domAttributeName,
+  setElementClass,
+} from "./dom";
 
 // ─── Fiber: Internal representation of a mounted VNode ─────────────────────────
 
@@ -117,7 +123,7 @@ function collectNodes(fiber: Fiber): Node[] {
     )
   ) {
     // Regular element or text — return its DOM node
-    if (fiber.node instanceof HTMLElement || fiber.node instanceof Text) {
+    if (fiber.node instanceof Element || fiber.node instanceof Text) {
       return [fiber.node];
     }
   }
@@ -227,7 +233,7 @@ function diffChildren(
 // ─── Strategy 3: Property Patching ─────────────────────────────────────────────
 
 function patchProps(
-  el: HTMLElement,
+  el: Element,
   oldProps: Props,
   newProps: Props,
   fiber: Fiber,
@@ -247,11 +253,11 @@ function patchProps(
         fiber.listeners.delete(event);
       }
     } else if (key === "className" || key === "class") {
-      el.className = "";
+      setElementClass(el, "");
     } else if (key === "style") {
       el.removeAttribute("style");
     } else {
-      el.removeAttribute(key);
+      el.removeAttribute(domAttributeName(el, key));
     }
   }
 
@@ -261,10 +267,9 @@ function patchProps(
     if (safeOldProps[key] === value) continue;
 
     if (key === "className" || key === "class") {
-      el.className = value || "";
+      setElementClass(el, value);
     } else if (key === "style" && typeof value === "object") {
-      el.removeAttribute("style");
-      Object.assign(el.style, value);
+      assignElementStyle(el, value, true);
     } else if (key.startsWith("on") && typeof value === "function") {
       const event = key.slice(2).toLowerCase();
       const oldListener = fiber.listeners.get(event);
@@ -280,12 +285,12 @@ function patchProps(
     } else if (key === "dangerouslySetInnerHTML") {
       el.innerHTML = value.__html;
     } else if (typeof value === "boolean") {
-      if (value) el.setAttribute(key, "");
-      else el.removeAttribute(key);
+      if (value) el.setAttribute(domAttributeName(el, key), "");
+      else el.removeAttribute(domAttributeName(el, key));
     } else if (value != null) {
-      el.setAttribute(key, String(value));
+      el.setAttribute(domAttributeName(el, key), String(value));
     } else {
-      el.removeAttribute(key);
+      el.removeAttribute(domAttributeName(el, key));
     }
   }
 }
@@ -311,7 +316,9 @@ function shallowPropsEqual(
     const k = aKeys[i];
     if (k === "children" || k === "key") continue;
     aCount++;
-    if (a[k] !== b[k]) return false;
+    if (!Object.prototype.hasOwnProperty.call(b, k) || a[k] !== b[k]) {
+      return false;
+    }
   }
   for (let i = 0; i < bKeys.length; i++) {
     const k = bKeys[i];
@@ -410,9 +417,9 @@ function patchFiber(
       return oldFiber;
     }
 
-    // Same HTML element — patch props + diff children
-    const el = oldFiber.node as HTMLElement;
-    if (el && el instanceof HTMLElement) {
+    // Same DOM element — patch props + diff children (HTML or SVG).
+    const el = oldFiber.node;
+    if (el instanceof Element) {
       patchProps(el, oldVNode.props, newVNode.props, oldFiber);
       const newChildVNodes = normalizeChildren(newVNode.props.children);
       diffChildren(oldFiber, el, oldFiber.children, newChildVNodes);
@@ -488,8 +495,8 @@ function mountVNode(
     return fiber;
   }
 
-  // HTML Element
-  const el = document.createElement(type as string);
+  // DOM element. SVG descendants inherit the namespace from their parent.
+  const el = createDomElement(type as string, parentNode);
   const fiber = createFiber(vnode, parentFiber);
   fiber.node = el;
 
@@ -523,7 +530,7 @@ function removeFiber(fiber: Fiber, parentNode: Node): void {
 }
 
 function cleanupFiber(fiber: Fiber): void {
-  if (fiber.node instanceof HTMLElement) {
+  if (fiber.node instanceof Element) {
     for (const [event, listener] of fiber.listeners) {
       fiber.node.removeEventListener(event, listener);
     }
@@ -537,15 +544,15 @@ function cleanupFiber(fiber: Fiber): void {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
-function applyProps(el: HTMLElement, props: Props, fiber: Fiber): void {
+function applyProps(el: Element, props: Props, fiber: Fiber): void {
   if (!props) return;
   for (const [key, value] of Object.entries(props)) {
     if (key === "children" || key === "key") continue;
 
     if (key === "className" || key === "class") {
-      el.className = value || "";
+      setElementClass(el, value);
     } else if (key === "style" && typeof value === "object") {
-      Object.assign(el.style, value);
+      assignElementStyle(el, value);
     } else if (key.startsWith("on") && typeof value === "function") {
       const event = key.slice(2).toLowerCase();
       el.addEventListener(event, value);
@@ -559,9 +566,9 @@ function applyProps(el: HTMLElement, props: Props, fiber: Fiber): void {
     } else if (key === "dangerouslySetInnerHTML") {
       el.innerHTML = value.__html;
     } else if (typeof value === "boolean") {
-      if (value) el.setAttribute(key, "");
+      if (value) el.setAttribute(domAttributeName(el, key), "");
     } else if (value != null) {
-      el.setAttribute(key, String(value));
+      el.setAttribute(domAttributeName(el, key), String(value));
     }
   }
 }

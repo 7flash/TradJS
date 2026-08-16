@@ -119,22 +119,22 @@ Replace:    destroys everything + rebuilds                ← total waste`}</div
         <div
           className="code-block"
           style={{ margin: "12px 0", fontSize: "0.72rem", lineHeight: "1.6" }}
-        >{`Prepend 500 new items to a 2000-item keyed list
+        >{`Remove the first 500 items from a 2000-item keyed list
 
- OLD:  [A₁, A₂, A₃, ........., A₂₀₀₀]
- NEW:  [B₁, B₂, ... B₅₀₀, A₁, A₂, A₃, ........., A₂₀₀₀]
-                           ↑ same items, shifted right
+ OLD:  [A₁, A₂, ... A₅₀₀, A₅₀₁, ........., A₂₀₀₀]
+ NEW:                   [A₅₀₁, ........., A₂₀₀₀]
+                         ↑ same 1500 keyed items
 
-Keyed:      match A₁-A₂₀₀₀ by key → identical props → 0 patches
-            mount B₁-B₅₀₀ at front → 500 creates + ~500 insertBefore
-            LIS says A-items still in order → 0 moves needed
+Keyed:      match A₅₀₁-A₂₀₀₀ by key → identical props → 0 patches
+            remove A₁-A₅₀₀ → 500 removes
+            LIS says remaining items are already ordered → 0 moves
 
-Sequential: position 0 was A₁, now B₁ → patches ALL props
-            position 1 was A₂, now B₂ → patches ALL props
-            ... EVERY position gets different content → patches ALL 2000 items
-            then mounts 500 new at end → 14,000+ DOM writes total
+Sequential: position 0 was A₁, now A₅₀₁ → patches ALL props
+            position 1 was A₂, now A₅₀₂ → patches ALL props
+            ... all 1500 surviving positions get different content
+            then removes 500 items from the end
 
-Replace:    destroys all 2000 + creates all 2500         ← catastrophic`}</div>
+Replace:    destroys all 2000 + creates all 1500         ← catastrophic`}</div>
         <div id="result-keyed" className="result-box">
           <span style={{ color: "var(--color-muted)" }}>Click ▶ Run</span>
         </div>

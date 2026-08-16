@@ -2,6 +2,16 @@ import { readdirSync, statSync, existsSync } from "fs";
 import path from "path";
 import { routeMeasure } from "./measure";
 
+const CONVENTION_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js"] as const;
+
+function findConventionFile(dir: string, stem: string): string | undefined {
+  for (const ext of CONVENTION_EXTENSIONS) {
+    const candidate = path.join(dir, `${stem}${ext}`);
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
 export interface Route {
   /** File path to the page component */
   filePath: string;
@@ -15,9 +25,9 @@ export interface Route {
   regex: RegExp;
   /** Layout file paths from root to page (for nested layouts) */
   layouts: string[];
-  /** Nearest error.tsx — walks up from page dir to root */
+  /** Nearest error convention file — walks up from page dir to root */
   errorPath?: string;
-  /** Nearest loading.tsx — walks up from page dir to root */
+  /** Nearest loading convention file — walks up from page dir to root */
   loadingPath?: string;
   /** Middleware file paths from root to page (like layouts) */
   middlewares: string[];
@@ -100,19 +110,14 @@ export function patternToRegex(pattern: string): RegExp {
   return new RegExp(`^${regexStr}$`);
 }
 
-/**
- * Find all layout.tsx files from appDir to the page's directory
- */
+/** Find all layout files from appDir to the page directory, root first. */
 function findLayouts(pageFilePath: string, appDir: string): string[] {
   const layouts: string[] = [];
   let currentDir = path.dirname(pageFilePath);
 
-  // Walk up from page directory to appDir, collecting layouts
   while (currentDir.startsWith(appDir) || currentDir === appDir) {
-    const layoutPath = path.join(currentDir, "layout.tsx");
-    if (existsSync(layoutPath)) {
-      layouts.unshift(layoutPath); // Add to front (root layouts first)
-    }
+    const layoutPath = findConventionFile(currentDir, "layout");
+    if (layoutPath) layouts.unshift(layoutPath);
 
     if (currentDir === appDir) break;
     currentDir = path.dirname(currentDir);
@@ -122,7 +127,7 @@ function findLayouts(pageFilePath: string, appDir: string): string[] {
 }
 
 /**
- * Find the nearest error.tsx by walking up from page dir to appDir.
+ * Find the nearest error convention file by walking up from page dir to appDir.
  * Returns the first found (most specific) or undefined.
  */
 function findErrorBoundary(
@@ -131,10 +136,8 @@ function findErrorBoundary(
 ): string | undefined {
   let currentDir = path.dirname(pageFilePath);
   while (currentDir.startsWith(appDir) || currentDir === appDir) {
-    for (const ext of [".tsx", ".ts", ".jsx", ".js"]) {
-      const errorPath = path.join(currentDir, `error${ext}`);
-      if (existsSync(errorPath)) return errorPath;
-    }
+    const errorPath = findConventionFile(currentDir, "error");
+    if (errorPath) return errorPath;
     if (currentDir === appDir) break;
     currentDir = path.dirname(currentDir);
   }
@@ -142,7 +145,7 @@ function findErrorBoundary(
 }
 
 /**
- * Find the nearest loading.tsx by walking up from page dir to appDir.
+ * Find the nearest loading convention file by walking up from page dir to appDir.
  */
 function findLoadingComponent(
   pageFilePath: string,
@@ -150,10 +153,8 @@ function findLoadingComponent(
 ): string | undefined {
   let currentDir = path.dirname(pageFilePath);
   while (currentDir.startsWith(appDir) || currentDir === appDir) {
-    for (const ext of [".tsx", ".ts", ".jsx", ".js"]) {
-      const loadingPath = path.join(currentDir, `loading${ext}`);
-      if (existsSync(loadingPath)) return loadingPath;
-    }
+    const loadingPath = findConventionFile(currentDir, "loading");
+    if (loadingPath) return loadingPath;
     if (currentDir === appDir) break;
     currentDir = path.dirname(currentDir);
   }
@@ -161,20 +162,15 @@ function findLoadingComponent(
 }
 
 /**
- * Find all middleware.ts files from appDir to the page's directory.
+ * Find all middleware convention files from appDir to the page's directory.
  * Collected root→page (outermost first), like layouts.
  */
 function findMiddlewares(pageFilePath: string, appDir: string): string[] {
   const middlewares: string[] = [];
   let currentDir = path.dirname(pageFilePath);
   while (currentDir.startsWith(appDir) || currentDir === appDir) {
-    for (const ext of [".ts", ".tsx", ".js"]) {
-      const mwPath = path.join(currentDir, `middleware${ext}`);
-      if (existsSync(mwPath)) {
-        middlewares.unshift(mwPath); // root first
-        break; // one per directory
-      }
-    }
+    const mwPath = findConventionFile(currentDir, "middleware");
+    if (mwPath) middlewares.unshift(mwPath);
     if (currentDir === appDir) break;
     currentDir = path.dirname(currentDir);
   }
@@ -182,7 +178,7 @@ function findMiddlewares(pageFilePath: string, appDir: string): string[] {
 }
 
 /**
- * Recursively discover all page.tsx/page.ts and route.ts files in app directory
+ * Recursively discover page and route convention files in the app directory
  */
 export interface DiscoverRoutesOptions {
   quiet?: boolean;
@@ -239,7 +235,7 @@ export function discoverRoutes(
               middlewares,
               type: "page",
             });
-          } else if (entry.match(/^route\.(tsx?|js)$/)) {
+          } else if (entry.match(/^route\.(tsx?|jsx?)$/)) {
             // API route
             const { pattern, paramNames } = filePathToPattern(fullPath, appDir);
             const regex = patternToRegex(pattern);

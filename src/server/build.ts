@@ -12,6 +12,7 @@ import autoprefixer from "autoprefixer";
 import postcss from "postcss";
 import tailwind from "@tailwindcss/postcss";
 import { buildMeasure } from "./measure";
+import { rewriteClassSelectors, scopeSelectorList } from "./css-selectors";
 
 const isDev = process.env.NODE_ENV !== "production";
 const { measure } = buildMeasure;
@@ -1059,6 +1060,21 @@ async function _buildStyleImpl(
   return outputPath;
 }
 
+function isInsideKeyframes(rule: any): boolean {
+  let parent = rule?.parent;
+  while (parent) {
+    if (
+      parent.type === "atrule" &&
+      typeof parent.name === "string" &&
+      /(?:^|-)keyframes$/i.test(parent.name)
+    ) {
+      return true;
+    }
+    parent = parent.parent;
+  }
+  return false;
+}
+
 // ─── Scoped CSS Builder ────────────────────────────────────────────────────────
 
 /**
@@ -1136,7 +1152,13 @@ async function _buildScopedStyleImpl(
     },
   );
 
-  const finalCss = result.css || "";
+  const scopedRoot = postcss.parse(result.css || "", { from: absolutePath });
+  scopedRoot.walkRules((rule) => {
+    // Keyframe step selectors (`from`, `to`, `50%`) are not DOM selectors.
+    if (isInsideKeyframes(rule)) return;
+    rule.selector = scopeSelectorList(rule.selector, routePattern);
+  });
+  const finalCss = scopedRoot.toString();
 
   const hash = new Bun.CryptoHasher("sha256")
     .update(finalCss)
@@ -1175,8 +1197,8 @@ const cssModuleCache = new Map<string, CSSModuleResult>();
 
 /**
  * Build a .module.css file:
- * 1. Processes CSS through PostCSS/Tailwind
- * 2. Hashes class selectors
+ * 1. Rewrites locally-authored class selectors on the PostCSS AST
+ * 2. Processes the rewritten source through PostCSS/Tailwind
  * 3. Returns processed CSS + class name mapping + built asset URL
  */
 export async function buildCSSModule(
@@ -1211,42 +1233,37 @@ export async function buildCSSModule(
 
   const rawCss = await Bun.file(absolutePath).text();
 
-  const processed = await runPostCSS(`CSS module ${absolutePath}`, rawCss, {
-    from: absolutePath,
-    to: "style.css",
-    map: false,
-  });
-
-  let css = processed.css || "";
-
-  const classRegex = /\.([A-Za-z_][A-Za-z0-9_-]*)/g;
-  const classNames = new Set<string>();
-
-  let match: RegExpExecArray | null;
-
-  while ((match = classRegex.exec(css)) !== null) {
-    const name = match[1];
-
-    if (name === "css") continue;
-
-    classNames.add(name);
-  }
-
   const fileHash = new Bun.CryptoHasher("sha256")
     .update(absolutePath)
     .digest("hex")
     .slice(0, 8);
 
+  // Rewrite only selectors authored in the module, before Tailwind/PostCSS can
+  // generate additional utility selectors. This prevents class-like strings,
+  // URLs, declaration values, and generated utility classes from being renamed.
   const classMap: Record<string, string> = {};
+  const moduleRoot = postcss.parse(rawCss, { from: absolutePath });
+  moduleRoot.walkRules((rule) => {
+    if (isInsideKeyframes(rule)) return;
+    const rewritten = rewriteClassSelectors(rule.selector, (original) => {
+      const scoped = classMap[original] ?? `${original}_${fileHash}`;
+      classMap[original] = scoped;
+      return scoped;
+    });
+    rule.selector = rewritten.selector;
+  });
 
-  for (const original of classNames) {
-    classMap[original] = `${original}_${fileHash}`;
-  }
+  const processed = await runPostCSS(
+    `CSS module ${absolutePath}`,
+    moduleRoot.toString(),
+    {
+      from: absolutePath,
+      to: "style.css",
+      map: false,
+    },
+  );
 
-  for (const [original, scoped] of Object.entries(classMap)) {
-    const selectorRegex = new RegExp(`\\.${original}(?![A-Za-z0-9_-])`, "g");
-    css = css.replace(selectorRegex, `.${scoped}`);
-  }
+  const css = processed.css || "";
 
   const cssHash = new Bun.CryptoHasher("sha256")
     .update(css)

@@ -1,0 +1,8 @@
+Delete these stale files/directories when applying this changed-files bundle:
+
+.config.toml
+bin/melina
+examples/showcase/.config.toml
+package/
+
+The unified patch also records these deletions directly.
