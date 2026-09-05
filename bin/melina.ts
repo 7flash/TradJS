@@ -54,29 +54,11 @@ if (command === "build") {
 }
 
 if (command === "serve") {
-  const { serve } = await import("../src/server");
-  const options: Record<string, any> = {};
-
-  for (let i = 1; i < args.length; i++) {
-    const arg = args[i];
-
-    if (arg === "--appdir") {
-      options.appDir = args[++i];
-    } else if (arg === "--unix") {
-      options.unix = args[++i];
-    } else if (arg.startsWith("--")) {
-      console.error(`Unknown serve option: ${arg}`);
-      process.exit(1);
-    } else if (options.port === undefined && /^\d+$/.test(arg)) {
-      options.port = Number(arg);
-    } else if (options.unix === undefined) {
-      options.unix = arg;
-    } else {
-      console.error(`Unexpected argument: ${arg}`);
-      process.exit(1);
-    }
-  }
-
+  const [{ serve }, { parseServeArgs }] = await Promise.all([
+    import("../src/server"),
+    import("../src/server/cli-serve"),
+  ]);
+  const options = parseServeArgs(args.slice(1));
   await serve(options);
   await new Promise(() => {});
 }

@@ -6,201 +6,237 @@
  */
 
 import path from "path";
-import { importMapMeasure } from "./measure";
+import { importMapMeasure, measureRequired } from "./measure";
 import type { ImportConfig, ImportMap } from "./types";
 
 const isDev = process.env.NODE_ENV !== "production";
 
-export async function imports(
-  subpaths: string[] = [],
-  pkgJson?: any,
-  lockFile: any = null,
-): Promise<ImportMap> {
-  // Explicit null/empty → no dependencies
-  if (pkgJson === null) {
-    return { imports: {} };
+interface PackageManifest {
+  dependencies?: Record<string, string>;
+}
+
+interface PeerDependencyMeta {
+  optional?: boolean;
+}
+
+interface BunLockPackageMetadata {
+  peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, PeerDependencyMeta>;
+}
+
+interface BunLockFile {
+  packages?: Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function asPackageManifest(value: unknown): PackageManifest | null {
+  if (!isRecord(value)) return null;
+  const dependencies = value.dependencies;
+  if (dependencies !== undefined && !isRecord(dependencies)) return null;
+
+  return {
+    dependencies: dependencies as Record<string, string> | undefined,
+  };
+}
+
+function asBunLock(value: unknown): BunLockFile | null {
+  if (!isRecord(value)) return null;
+  return { packages: isRecord(value.packages) ? value.packages : undefined };
+}
+
+function getLockMetadata(
+  lockFile: BunLockFile | null,
+  packageName: string,
+): BunLockPackageMetadata | undefined {
+  const entry = lockFile?.packages?.[packageName];
+  if (!Array.isArray(entry)) return undefined;
+
+  const metadata = entry[2];
+  return isRecord(metadata) ? (metadata as BunLockPackageMetadata) : undefined;
+}
+
+function getPeerDependencies(
+  packageName: string,
+  dependencies: Record<string, string>,
+  lockFile: BunLockFile | null,
+): string[] {
+  const metadata = getLockMetadata(lockFile, packageName);
+  if (!metadata?.peerDependencies) return [];
+
+  return Object.keys(metadata.peerDependencies).filter((peerName) => {
+    const isOptional = metadata.peerDependenciesMeta?.[peerName]?.optional;
+    return !isOptional && peerName in dependencies;
+  });
+}
+
+function cleanVersion(version: string): string {
+  return version.replace(/^[~^]/, "");
+}
+
+function splitPackageSpecifier(specifier: string): {
+  baseName: string;
+  subpath: string;
+} {
+  const parts = specifier.split("/").filter(Boolean);
+
+  if (specifier.startsWith("@")) {
+    const baseName = parts.slice(0, 2).join("/");
+    return { baseName, subpath: parts.slice(2).join("/") };
   }
 
-  let packageJson: any = pkgJson;
-  if (packageJson === undefined) {
+  return {
+    baseName: parts[0] ?? specifier,
+    subpath: parts.slice(1).join("/"),
+  };
+}
+
+async function loadJsonFile(filePath: string): Promise<unknown> {
+  return (
+    await import(filePath, {
+      assert: { type: "json" },
+    })
+  ).default;
+}
+
+export async function imports(
+  subpaths: string[] = [],
+  pkgJson?: unknown,
+  lockFile: unknown = null,
+): Promise<ImportMap> {
+  // Explicit null means the caller intentionally wants no dependencies.
+  if (pkgJson === null) return { imports: {} };
+
+  let packageJsonValue: unknown = pkgJson;
+  if (packageJsonValue === undefined) {
     try {
-      const packagePath = path.resolve(process.cwd(), "package.json");
-      packageJson = (await import(packagePath, { assert: { type: "json" } }))
-        .default;
-    } catch (e) {
+      packageJsonValue = await loadJsonFile(
+        path.resolve(process.cwd(), "package.json"),
+      );
+    } catch {
       return { imports: {} };
     }
   }
 
-  if (!packageJson || typeof packageJson !== "object") {
-    return { imports: {} };
-  }
+  const packageJson = asPackageManifest(packageJsonValue);
+  if (!packageJson) return { imports: {} };
 
-  let bunLock: any = lockFile;
-  if (!bunLock) {
+  let bunLock = asBunLock(lockFile);
+  if (lockFile == null) {
     try {
-      bunLock = (
-        await import(path.resolve(process.cwd(), "bun.lock"), {
-          assert: { type: "json" },
-        })
-      ).default;
-    } catch (e) {
-      // No bun.lock file, proceeding without it
+      bunLock = asBunLock(
+        await loadJsonFile(path.resolve(process.cwd(), "bun.lock")),
+      );
+    } catch {
+      // A lockfile is optional; package.json still provides enough information.
+      bunLock = null;
     }
   }
 
-  const importMap: ImportMap = { imports: {} };
-  const versionMap: Record<string, string> = {};
-  const dependencies = {
-    ...(packageJson.dependencies || {}),
-  };
-
-  // No dependencies → empty map
-  if (Object.keys(dependencies).length === 0) {
-    return { imports: {} };
-  }
-
-  const getCleanVersion = (version: string): string =>
-    version.replace(/^[~^]/, "");
+  const dependencies = packageJson.dependencies ?? {};
+  if (Object.keys(dependencies).length === 0) return { imports: {} };
 
   const importsConfig: Record<string, ImportConfig> = {};
 
-  // Process top-level dependencies
-  Object.entries(dependencies).forEach(([name, versionSpec]) => {
-    if (typeof versionSpec !== "string") return;
+  for (const [name, versionSpec] of Object.entries(dependencies)) {
+    if (typeof versionSpec !== "string") continue;
 
-    const cleanVersion = getCleanVersion(versionSpec);
-    let peerDeps: string[] = [];
-
-    if (bunLock && bunLock.packages && bunLock.packages[name]) {
-      const lockEntry = bunLock.packages[name];
-      const metadata = lockEntry[2];
-
-      if (metadata && metadata.peerDependencies) {
-        Object.keys(metadata.peerDependencies).forEach((peerName) => {
-          if (!metadata.peerDependenciesMeta?.[peerName]?.optional) {
-            if (dependencies[peerName]) {
-              peerDeps.push(peerName);
-            }
-          }
-        });
-      }
-    }
-
+    const peerDeps = getPeerDependencies(name, dependencies, bunLock);
     importsConfig[name] = {
       name,
-      version: cleanVersion,
+      version: cleanVersion(versionSpec),
       ...(peerDeps.length > 0 ? { deps: peerDeps } : {}),
     };
-  });
+  }
 
-  subpaths.forEach((subpath) => {
-    const [baseName, ...subpathParts] = subpath.split("/");
+  for (const specifier of subpaths) {
+    const { baseName, subpath } = splitPackageSpecifier(specifier);
     const versionSpec = dependencies[baseName];
-    if (!versionSpec) return;
+    if (!versionSpec) continue;
 
-    const cleanVersion = getCleanVersion(versionSpec);
-    let peerDeps: string[] = [];
-
-    if (bunLock && bunLock.packages && bunLock.packages[baseName]) {
-      const lockEntry = bunLock.packages[baseName];
-      const metadata = lockEntry[2];
-
-      if (metadata && metadata.peerDependencies) {
-        Object.keys(metadata.peerDependencies).forEach((peerName) => {
-          if (!metadata.peerDependenciesMeta?.[peerName]?.optional) {
-            if (dependencies[peerName]) {
-              peerDeps.push(peerName);
-            }
-          }
-        });
-      }
-    }
-
-    importsConfig[subpath] = {
-      name: subpath,
-      version: cleanVersion,
+    const peerDeps = getPeerDependencies(baseName, dependencies, bunLock);
+    importsConfig[specifier] = {
+      name: specifier,
+      version: cleanVersion(versionSpec),
       ...(peerDeps.length > 0 ? { deps: peerDeps } : {}),
       baseName,
-      subpath: subpathParts.join("/"),
+      subpath,
     };
-  });
+  }
 
-  await importMapMeasure.measure("Generate Import Map", async () => {
-    // First pass: Collect all versions specified for base packages
-    Object.entries(importsConfig).forEach(([_, imp]) => {
-      const baseName =
-        imp.baseName ||
-        (imp.name.startsWith("@")
-          ? imp.name.split("/").slice(0, 2).join("/")
-          : imp.name.split("/")[0]);
-      if (!versionMap[baseName] || imp.version) {
-        versionMap[baseName] = imp.version ?? "latest";
-      }
-    });
+  return measureRequired(
+    importMapMeasure,
+    {
+      label: "Generate import map",
+      packages: Object.keys(importsConfig).length,
+      result: (value: ImportMap) => ({
+        imports: Object.keys(value.imports).length,
+      }),
+    },
+    async () => {
+      const importMap: ImportMap = { imports: {} };
+      const versionMap: Record<string, string> = {};
 
-    // Second pass: Build the import map URLs
-    Object.entries(importsConfig).forEach(([key, imp]) => {
-      let url: string;
-      const baseName =
-        imp.baseName ||
-        (imp.name.startsWith("@")
-          ? imp.name.split("/").slice(0, 2).join("/")
-          : imp.name.split("/")[0]);
-      const version = versionMap[baseName] || "latest";
-
-      const useStarPrefix = imp.markAllExternal === true;
-      const starPrefix = useStarPrefix ? "*" : "";
-
-      if (imp.subpath) {
-        url = `https://esm.sh/${starPrefix}${baseName}@${version}/${imp.subpath}`;
-      } else {
-        url = `https://esm.sh/${starPrefix}${imp.name}@${version}`;
+      // First pass: collect versions for base packages.
+      for (const imp of Object.values(importsConfig)) {
+        const { baseName } = splitPackageSpecifier(imp.baseName || imp.name);
+        versionMap[baseName] ??= imp.version ?? "latest";
       }
 
-      let queryParts: string[] = [];
+      // Second pass: build esm.sh URLs.
+      for (const [key, imp] of Object.entries(importsConfig)) {
+        const { baseName } = splitPackageSpecifier(imp.baseName || imp.name);
+        const version = versionMap[baseName] || "latest";
+        const useStarPrefix = imp.markAllExternal === true;
+        const starPrefix = useStarPrefix ? "*" : "";
 
-      if (imp.external && !useStarPrefix) {
-        let externals: string[] = [];
-        if (Array.isArray(imp.external)) {
-          externals = imp.external;
-        } else if (imp.external === true) {
-          externals = Object.keys(importsConfig)
-            .filter((otherKey) => otherKey !== key)
-            .map((otherKey) => importsConfig[otherKey].name.split("/")[0])
-            .filter((value, index, self) => self.indexOf(value) === index);
+        const url = imp.subpath
+          ? `https://esm.sh/${starPrefix}${baseName}@${version}/${imp.subpath}`
+          : `https://esm.sh/${starPrefix}${imp.name}@${version}`;
+
+        const queryParts: string[] = [];
+
+        if (imp.external && !useStarPrefix) {
+          let externals: string[] = [];
+          if (Array.isArray(imp.external)) {
+            externals = imp.external;
+          } else {
+            externals = Object.keys(importsConfig)
+              .filter((otherKey) => otherKey !== key)
+              .map((otherKey) => splitPackageSpecifier(otherKey).baseName)
+              .filter((value, index, self) => self.indexOf(value) === index);
+          }
+          if (externals.length > 0) {
+            queryParts.push(`external=${externals.join(",")}`);
+          }
         }
-        if (externals.length > 0) {
-          queryParts.push(`external=${externals.join(",")}`);
+
+        if (imp.deps?.length) {
+          const depsList = imp.deps
+            .map((depName) => {
+              const depBaseName = splitPackageSpecifier(depName).baseName;
+              const depVersion = versionMap[depBaseName] || "latest";
+              return `${depName}@${depVersion}`;
+            })
+            .join(",");
+          queryParts.push(`deps=${depsList}`);
+        }
+
+        if (isDev) queryParts.push("dev");
+
+        const query = queryParts.length ? `?${queryParts.join("&")}` : "";
+        importMap.imports[key] = url + query;
+
+        if (!key.endsWith("/")) {
+          // Import-map prefix targets must themselves be path prefixes. Query
+          // parameters belong on the exact-package mapping, not after the slash.
+          importMap.imports[`${key}/`] = `${url}/`;
         }
       }
 
-      if (imp.deps?.length) {
-        const depsList = imp.deps
-          .map((depName) => {
-            const depBaseName = depName.startsWith("@")
-              ? depName.split("/").slice(0, 2).join("/")
-              : depName.split("/")[0];
-            const depVersion = versionMap[depBaseName] || "latest";
-            return `${depName}@${depVersion}`;
-          })
-          .join(",");
-        queryParts.push(`deps=${depsList}`);
-      }
-
-      if (isDev) queryParts.push("dev");
-
-      const query = queryParts.length ? `?${queryParts.join("&")}` : "";
-
-      importMap.imports[key] = url + query;
-      if (!key.endsWith("/")) {
-        let subQuery = query ? query.replace(/^\?/, "&") : "";
-        importMap.imports[key + "/"] = url + subQuery + "/";
-      }
-
-      importMapMeasure.measure.note(`Import: ${key} → ${url + query}`);
-    });
-  });
-
-  return importMap;
+      return importMap;
+    },
+  );
 }

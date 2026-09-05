@@ -14,12 +14,11 @@
 
 import path from "path";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
-import { cliBuildMeasure } from "./measure";
+import { cliBuildMeasure, measureRequired } from "./measure";
 
 import { builtAssets, buildClientScript, buildStyle } from "./build";
 import { discoverRoutes } from "./router";
-
-const { measure } = cliBuildMeasure;
+import { clientCompanionPath, styleCompanionPath } from "./conventions";
 
 export interface BuildOptions {
   /** Output directory (default: ./dist) */
@@ -32,15 +31,163 @@ export interface BuildOptions {
   entries?: string[];
 }
 
+type BuildInput = {
+  kind: "client" | "style";
+  filePath: string;
+  role:
+    "entry" | "global-style" | "page-client" | "layout-client" | "page-style";
+  route?: string;
+};
+
+interface BuildSummary {
+  inputCount: number;
+  assetCount: number;
+  totalBytes: number;
+  outDir: string;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${bytes}B`;
+}
+
+function addBuildInput(
+  inputs: Map<string, BuildInput>,
+  input: BuildInput,
+): void {
+  const resolved = path.resolve(input.filePath);
+  if (!existsSync(resolved) || inputs.has(resolved)) return;
+  inputs.set(resolved, { ...input, filePath: resolved });
+}
+
+function collectAppBuildInputs(
+  appDir: string,
+  globalCss: string | null,
+): BuildInput[] {
+  const inputs = new Map<string, BuildInput>();
+
+  if (globalCss) {
+    addBuildInput(inputs, {
+      kind: "style",
+      filePath: globalCss,
+      role: "global-style",
+    });
+  }
+
+  // Route discovery is already measured internally. Because measureRequired()
+  // auto-nests, this becomes a direct child of the build trace without an extra
+  // duplicate "Discover routes" wrapper here.
+  const routes = discoverRoutes(appDir);
+  console.log(`📁 Discovered ${routes.length} routes`);
+
+  for (const route of routes) {
+    if (route.type !== "page") continue;
+
+    const pageClient = clientCompanionPath(route.filePath);
+    addBuildInput(inputs, {
+      kind: "client",
+      filePath: pageClient,
+      role: "page-client",
+      route: route.pattern,
+    });
+
+    const pageCss = styleCompanionPath(route.filePath);
+    addBuildInput(inputs, {
+      kind: "style",
+      filePath: pageCss,
+      role: "page-style",
+      route: route.pattern,
+    });
+
+    for (const layoutPath of route.layouts) {
+      const layoutClient = clientCompanionPath(layoutPath);
+      addBuildInput(inputs, {
+        kind: "client",
+        filePath: layoutClient,
+        role: "layout-client",
+        route: route.pattern,
+      });
+    }
+  }
+
+  return [...inputs.values()];
+}
+
+function collectEntryBuildInputs(entries: string[]): BuildInput[] {
+  return entries.map((entry) => {
+    const filePath = path.resolve(entry);
+    if (!existsSync(filePath)) {
+      throw new Error(`Entry not found: ${entry}`);
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === ".css") {
+      return { kind: "style", filePath, role: "entry" };
+    }
+    if ([".ts", ".tsx", ".js", ".jsx"].includes(ext)) {
+      return { kind: "client", filePath, role: "entry" };
+    }
+    throw new Error(`Unsupported entry type: ${entry}`);
+  });
+}
+
+async function buildInput(input: BuildInput): Promise<void> {
+  await measureRequired(
+    cliBuildMeasure,
+    {
+      label: "Build input",
+      role: input.role,
+      file: path.basename(input.filePath),
+      ...(input.route ? { route: input.route } : {}),
+    },
+    async () => {
+      if (input.kind === "style") {
+        await buildStyle(input.filePath);
+      } else {
+        await buildClientScript(input.filePath);
+      }
+    },
+  );
+}
+
+function writeBuiltAssets(outDir: string): {
+  assetCount: number;
+  totalBytes: number;
+} {
+  mkdirSync(outDir, { recursive: true });
+
+  let assetCount = 0;
+  let totalBytes = 0;
+
+  for (const [assetPath, { content }] of Object.entries(builtAssets)) {
+    // Asset keys are URL paths and normally begin with '/'. Strip that leading
+    // slash before joining so path.join cannot escape the requested output dir.
+    const relativeAssetPath = assetPath.replace(/^[/\\]+/, "");
+    const dest = path.join(outDir, relativeAssetPath);
+    const dir = path.dirname(dest);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+    writeFileSync(dest, Buffer.from(content));
+    assetCount++;
+    totalBytes += content.byteLength;
+
+    const ext = path.extname(assetPath);
+    const icon = ext === ".css" ? "🎨" : ext === ".js" ? "⚡" : "📄";
+    console.log(`   ${icon} ${assetPath} (${formatBytes(content.byteLength)})`);
+  }
+
+  return { assetCount, totalBytes };
+}
+
 /**
  * Build all assets to disk.
  *
- * In app-router mode (default): discovers all routes from appDir, builds
- * every page.client.tsx, layout.client.tsx, globals.css, page.css, etc.
- *
- * In entry mode (--entry flags): builds only the specified files.
+ * In app-router mode, inputs are collected from discovered page/layout chains
+ * and deduplicated by absolute path before building. In entry mode, only the
+ * explicitly supplied files are built.
  */
-export async function buildToDisk(options: BuildOptions = {}) {
+export async function buildToDisk(options: BuildOptions = {}): Promise<void> {
   const outDir = path.resolve(options.outDir || "./dist");
   const appDir = path.resolve(options.appDir || "./app");
   const globalCss = options.globalCss
@@ -48,135 +195,65 @@ export async function buildToDisk(options: BuildOptions = {}) {
     : existsSync(path.join(appDir, "globals.css"))
       ? path.join(appDir, "globals.css")
       : null;
+  const entryMode = Boolean(options.entries?.length);
 
-  console.log(`\n🦊 tradjs build`);
-  console.log(`   App dir:  ${appDir}`);
-  console.log(`   Out dir:  ${outDir}`);
-  if (globalCss) console.log(`   CSS:      ${globalCss}`);
-  console.log("");
-
-  let buildCount = 0;
-
-  if (options.entries && options.entries.length > 0) {
-    // ─── Entry Mode ─────────────────────────────────────────────
-    console.log(`📦 Building ${options.entries.length} entry point(s)...`);
-
-    for (const entry of options.entries) {
-      const absEntry = path.resolve(entry);
-      if (!existsSync(absEntry)) {
-        console.error(`   ✗ Not found: ${entry}`);
-        continue;
-      }
-
-      const ext = path.extname(absEntry).toLowerCase();
-      await measure(`Entry: ${path.basename(entry)}`, async () => {
-        if (ext === ".css") {
-          await buildStyle(absEntry);
-        } else if ([".ts", ".tsx", ".js", ".jsx"].includes(ext)) {
-          await buildClientScript(absEntry);
-        } else {
-          console.warn(`   ⚠ Skipping unsupported file: ${entry}`);
-        }
-      });
-      buildCount++;
-    }
-  } else {
-    // ─── App Router Mode ────────────────────────────────────────
-    if (!existsSync(appDir)) {
-      console.error(`✗ App directory not found: ${appDir}`);
-      process.exit(1);
-    }
-
-    // Build global CSS
-    if (globalCss && existsSync(globalCss)) {
-      await measure("Global CSS", async () => {
-        await buildStyle(globalCss);
-      });
-      buildCount++;
-    }
-
-    // Discover routes and build all client scripts
-    const routes =
-      (await measure("Discover routes", async () => {
-        return discoverRoutes(appDir);
-      })) || [];
-
-    console.log(`📁 Discovered ${routes.length} routes`);
-
-    for (const route of routes) {
-      const routeDir = path.dirname(route.filePath);
-
-      // Build page.client.tsx if it exists
-      const pageClient = path.join(routeDir, "page.client.tsx");
-      if (existsSync(pageClient)) {
-        await measure(`Client: ${route.pattern}`, async () => {
-          await buildClientScript(pageClient);
-        });
-        buildCount++;
-      }
-
-      // Build layout.client.tsx if it exists
-      const layoutClient = path.join(routeDir, "layout.client.tsx");
-      if (existsSync(layoutClient)) {
-        await measure(`Layout Client: ${route.pattern}`, async () => {
-          await buildClientScript(layoutClient);
-        });
-        buildCount++;
-      }
-
-      // Build page.css if it exists
-      const pageCss = path.join(routeDir, "page.css");
-      if (existsSync(pageCss)) {
-        await measure(`Page CSS: ${route.pattern}`, async () => {
-          await buildStyle(pageCss);
-        });
-        buildCount++;
-      }
-    }
-
-    // Also check for layout.client.tsx at appDir root
-    const rootLayoutClient = path.join(appDir, "layout.client.tsx");
-    if (existsSync(rootLayoutClient)) {
-      await measure("Root Layout Client", async () => {
-        await buildClientScript(rootLayoutClient);
-      });
-      buildCount++;
-    }
+  if (!entryMode && !existsSync(appDir)) {
+    throw new Error(`App directory not found: ${appDir}`);
   }
 
-  // ─── Write to Disk ──────────────────────────────────────────────
-  mkdirSync(outDir, { recursive: true });
+  const summary = await measureRequired(
+    cliBuildMeasure,
+    {
+      label: "Build project",
+      mode: entryMode ? "entries" : "app-router",
+      outDir,
+      ...(entryMode ? {} : { appDir }),
+      result: (value: BuildSummary) => ({
+        inputs: value.inputCount,
+        assets: value.assetCount,
+        bytes: value.totalBytes,
+      }),
+    },
+    async (): Promise<BuildSummary> => {
+      console.log(`\n🦊 tradjs build`);
+      if (!entryMode) console.log(`   App dir:  ${appDir}`);
+      console.log(`   Out dir:  ${outDir}`);
+      if (globalCss && !entryMode) console.log(`   CSS:      ${globalCss}`);
+      console.log("");
 
-  let writtenCount = 0;
-  let totalBytes = 0;
+      const inputs = entryMode
+        ? collectEntryBuildInputs(options.entries ?? [])
+        : collectAppBuildInputs(appDir, globalCss);
 
-  for (const [assetPath, { content, contentType }] of Object.entries(
-    builtAssets,
-  )) {
-    const dest = path.join(outDir, assetPath);
-    const dir = path.dirname(dest);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      if (entryMode) {
+        console.log(`📦 Building ${inputs.length} entry point(s)...`);
+      }
 
-    writeFileSync(dest, Buffer.from(content));
-    writtenCount++;
-    totalBytes += content.byteLength;
+      for (const input of inputs) {
+        await buildInput(input);
+      }
 
-    const ext = path.extname(assetPath);
-    const icon = ext === ".css" ? "🎨" : ext === ".js" ? "⚡" : "📄";
-    const size =
-      content.byteLength > 1024
-        ? `${(content.byteLength / 1024).toFixed(1)}KB`
-        : `${content.byteLength}B`;
-    console.log(`   ${icon} ${assetPath} (${size})`);
-  }
+      const written = await measureRequired(
+        cliBuildMeasure,
+        {
+          label: "Write assets",
+          outDir,
+          result: (value: { assetCount: number; totalBytes: number }) => value,
+        },
+        async () => writeBuiltAssets(outDir),
+      );
 
-  const totalSize =
-    totalBytes > 1024 * 1024
-      ? `${(totalBytes / 1024 / 1024).toFixed(1)}MB`
-      : `${(totalBytes / 1024).toFixed(1)}KB`;
+      return {
+        inputCount: inputs.length,
+        assetCount: written.assetCount,
+        totalBytes: written.totalBytes,
+        outDir,
+      };
+    },
+  );
 
   console.log(
-    `\n✅ Built ${writtenCount} assets (${totalSize}) to ${outDir}\n`,
+    `\n✅ Built ${summary.inputCount} inputs → ${summary.assetCount} assets (${formatBytes(summary.totalBytes)}) to ${summary.outDir}\n`,
   );
 }
 
@@ -187,25 +264,42 @@ export function parseBuildArgs(args: string[]): BuildOptions {
   const options: BuildOptions = {};
   const entries: string[] = [];
 
+  const takeValue = (flag: string, index: number): string => {
+    const value = args[index + 1];
+    if (!value || value.startsWith("--")) {
+      throw new Error(`Missing value for ${flag}`);
+    }
+    return value;
+  };
+
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "--outdir" && args[i + 1]) {
-      options.outDir = args[++i];
-    } else if (arg === "--appdir" && args[i + 1]) {
-      options.appDir = args[++i];
-    } else if (arg === "--css" && args[i + 1]) {
-      options.globalCss = args[++i];
-    } else if (arg === "--entry" && args[i + 1]) {
-      entries.push(args[++i]);
-    } else if (!arg.startsWith("-")) {
-      // Bare argument = outdir shorthand
-      options.outDir = arg;
+
+    switch (arg) {
+      case "--outdir":
+        options.outDir = takeValue(arg, i++);
+        break;
+      case "--appdir":
+        options.appDir = takeValue(arg, i++);
+        break;
+      case "--css":
+        options.globalCss = takeValue(arg, i++);
+        break;
+      case "--entry":
+        entries.push(takeValue(arg, i++));
+        break;
+      default:
+        if (arg.startsWith("-")) {
+          throw new Error(`Unknown build option: ${arg}`);
+        }
+        if (options.outDir !== undefined) {
+          throw new Error(`Unexpected build argument: ${arg}`);
+        }
+        // Bare argument = outdir shorthand.
+        options.outDir = arg;
     }
   }
 
-  if (entries.length > 0) {
-    options.entries = entries;
-  }
-
+  if (entries.length > 0) options.entries = entries;
   return options;
 }

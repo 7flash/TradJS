@@ -109,7 +109,8 @@
     "@types/bun": "latest",
     "@types/jsdom": "^28.0.0",
     "jsdom": "^28.1.0",
-    "tradjs": "link:."
+    "tradjs": "link:.",
+    "typescript": "^5.8.3"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.10",
@@ -120,8 +121,12 @@
   },
   "types": "./dist/web.d.ts",
   "scripts": {
-    "prebuild": "npx -y rimraf dist",
+    "clean": "bun -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
+    "prebuild": "bun run clean",
     "build": "tsc",
+    "typecheck": "tsc --noEmit --emitDeclarationOnly false",
+    "test": "bun test",
+    "check": "bun run typecheck && bun test",
     "prepublishOnly": "npm run build"
   }
 }

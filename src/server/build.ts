@@ -11,11 +11,15 @@ import { existsSync, readFileSync } from "fs";
 import autoprefixer from "autoprefixer";
 import postcss from "postcss";
 import tailwind from "@tailwindcss/postcss";
-import { buildMeasure } from "./measure";
+import {
+  buildMeasure,
+  measureNote,
+  measureRequired,
+  type ServerMeasureAction,
+} from "./measure";
 import { rewriteClassSelectors, scopeSelectorList } from "./css-selectors";
 
 const isDev = process.env.NODE_ENV !== "production";
-const { measure } = buildMeasure;
 
 // ─── In-Memory Caches ──────────────────────────────────────────────────────────
 
@@ -38,7 +42,7 @@ function normalizeBuildKey(filePath: string): string {
   return path.resolve(process.cwd(), filePath);
 }
 
-// ─── Error Formatting / measure-fn Safe Wrapper ────────────────────────────────
+// ─── Error Formatting / Measured Build Boundary ───────────────────────────────
 
 function formatPosition(position: any): string {
   if (!position) return "";
@@ -205,16 +209,24 @@ function makeDetailedError(context: string, error: unknown): Error {
   }
 
   const details = formatUnknownError(error);
-  return new Error(`[tradjs] ${context} failed\n\n${details}`);
+  return new Error(`[tradjs] ${context} failed\n\n${details}`, {
+    cause: error,
+  });
 }
 
 /**
- * Build steps should fail fast. The new measure-fn throws by default,
- * so measurement no longer changes build error semantics.
+ * Build steps are fail-fast, but their errors need build-specific diagnostics.
+ * `measureRequired()` preserves the original thrown value, so this wrapper only
+ * adds source/log context; it does not need to understand measure-fn internals.
  */
-async function measured<T>(label: string, fn: () => Promise<T>): Promise<T> {
+async function measured<T>(
+  action: ServerMeasureAction<T>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const label = typeof action === "string" ? action : action.label;
+
   try {
-    return await measure(label, fn);
+    return await measureRequired(buildMeasure, action, fn);
   } catch (error) {
     throw makeDetailedError(label, error);
   }
@@ -350,7 +362,7 @@ const buildInFlight = new Map<string, Promise<string>>();
 
 // Global build serializer — prevents concurrent Bun builds + PostCSS from
 // overwhelming the process on rapid navigation.
-let buildQueue: Promise<any> = Promise.resolve();
+let buildQueue: Promise<void> = Promise.resolve();
 
 async function serializedBuild<T>(fn: () => Promise<T>): Promise<T> {
   const prev = buildQueue;
@@ -520,17 +532,24 @@ export async function buildClientScript(clientPath: string): Promise<string> {
 
   const promise = (async () => {
     try {
-      return await measured(`Client: ${path.basename(clientPath)}`, () =>
-        _buildClientScriptImpl(cacheKey),
+      return await measured(
+        {
+          label: "Build client script",
+          file: path.basename(clientPath),
+          result: (outputPath: string) => ({ outputPath }),
+        },
+        () => _buildClientScriptImpl(cacheKey),
       );
     } catch (error) {
       const cached = buildCache[cacheKey];
 
       if (cached) {
-        console.error(
-          `[tradjs] Client build failed for ${clientPath}; using cached version.\n\n${formatUnknownError(error)}`,
-        );
-
+        await measureNote(buildMeasure, {
+          label: "Using cached client build",
+          file: path.basename(clientPath),
+          outputPath: cached.outputPath,
+          reason: error instanceof Error ? error.message : String(error),
+        });
         return cached.outputPath;
       }
 
@@ -812,9 +831,10 @@ ${mapEntries}
     }
 
     if (matchedServerPackages.size > 0) {
-      console.warn(
-        `[tradjs] Server-only packages stubbed for browser: ${[...matchedServerPackages].sort().join(", ")}`,
-      );
+      await measureNote(buildMeasure, {
+        label: "Server-only packages stubbed for browser",
+        packages: [...matchedServerPackages].sort(),
+      });
     }
   }
 
@@ -847,8 +867,14 @@ export async function buildScript(
   const existing = buildInFlight.get(absolutePath);
   if (existing) return existing;
 
-  const promise = measured(`Script: ${path.basename(filePath)}`, () =>
-    _buildScriptImpl(absolutePath, absolutePath, allExternal),
+  const promise = measured(
+    {
+      label: "Build script",
+      file: path.basename(filePath),
+      external: allExternal ? "all" : "dependencies",
+      result: (outputPath: string) => ({ outputPath }),
+    },
+    () => _buildScriptImpl(absolutePath, absolutePath, allExternal),
   );
 
   buildInFlight.set(absolutePath, promise);
@@ -957,17 +983,24 @@ export async function buildStyle(filePath: string): Promise<string> {
 
   const promise = (async () => {
     try {
-      return await measured(`Style: ${path.basename(filePath)}`, () =>
-        _buildStyleImpl(absolutePath, absolutePath),
+      return await measured(
+        {
+          label: "Build style",
+          file: path.basename(filePath),
+          result: (outputPath: string) => ({ outputPath }),
+        },
+        () => _buildStyleImpl(absolutePath, absolutePath),
       );
     } catch (error) {
       const cached = buildCache[absolutePath];
 
       if (cached) {
-        console.error(
-          `[tradjs] Style build failed for ${filePath}; using cached version.\n\n${formatUnknownError(error)}`,
-        );
-
+        await measureNote(buildMeasure, {
+          label: "Using cached style build",
+          file: path.basename(filePath),
+          outputPath: cached.outputPath,
+          reason: error instanceof Error ? error.message : String(error),
+        });
         return cached.outputPath;
       }
 
@@ -1093,8 +1126,14 @@ export async function buildScopedStyle(
   const existing = buildInFlight.get(cacheKey);
   if (existing) return existing;
 
-  const promise = measured(`Scoped CSS: ${routePattern}`, () =>
-    _buildScopedStyleImpl(filePath, routePattern, cacheKey),
+  const promise = measured(
+    {
+      label: "Build scoped style",
+      route: routePattern,
+      file: path.basename(filePath),
+      result: (outputPath: string) => ({ outputPath }),
+    },
+    () => _buildScopedStyleImpl(filePath, routePattern, cacheKey),
   );
 
   buildInFlight.set(cacheKey, promise);
@@ -1329,8 +1368,13 @@ export async function buildAsset(file?: BunFile): Promise<string> {
   const existing = buildInFlight.get(filePath);
   if (existing) return existing;
 
-  const promise = measured(`Asset: ${path.basename(filePath)}`, () =>
-    _buildAssetImpl(file, filePath),
+  const promise = measured(
+    {
+      label: "Build asset",
+      file: path.basename(filePath),
+      result: (outputPath: string) => ({ outputPath }),
+    },
+    () => _buildAssetImpl(file, filePath),
   );
 
   buildInFlight.set(filePath, promise);

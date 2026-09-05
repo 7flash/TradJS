@@ -1,8 +1,19 @@
 import { readdirSync, statSync, existsSync } from "fs";
 import path from "path";
-import { routeMeasure } from "./measure";
+import { errorMessage } from "./errors";
+import { measureRequiredSync, routeMeasure } from "./measure";
 
 const CONVENTION_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js"] as const;
+
+function isInsideDirectory(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) &&
+      relative !== ".." &&
+      !path.isAbsolute(relative))
+  );
+}
 
 function findConventionFile(dir: string, stem: string): string | undefined {
   for (const ext of CONVENTION_EXTENSIONS) {
@@ -66,22 +77,28 @@ export function filePathToPattern(
     return { pattern: "/", paramNames: [] };
   }
 
-  // Convert [param] to :param and [...slug] to *slug, collecting param names
+  // Convert [param] to :param and [...slug] to *slug, collecting param names.
   const paramNames: string[] = [];
+  const addParamName = (name: string) => {
+    if (paramNames.includes(name)) {
+      throw new Error(`Duplicate route parameter "${name}" in ${filePath}`);
+    }
+    paramNames.push(name);
+  };
   const pattern =
     "/" +
     relativePath
       .split("/")
-      .map((segment) => {
+      .map((segment: string) => {
         const catchAllMatch = segment.match(/^\[\.\.\.([^\]]+)\]$/);
         if (catchAllMatch) {
-          paramNames.push(catchAllMatch[1]);
+          addParamName(catchAllMatch[1]);
           return `*${catchAllMatch[1]}`;
         }
 
         const match = segment.match(/^\[([^\]]+)\]$/);
         if (match) {
-          paramNames.push(match[1]);
+          addParamName(match[1]);
           return `:${match[1]}`;
         }
 
@@ -103,11 +120,22 @@ export function filePathToPattern(
  * /docs/*slug -> /^\/docs\/(.+)$/
  */
 export function patternToRegex(pattern: string): RegExp {
-  const regexStr = pattern
-    .replace(/\//g, "\\/")
-    .replace(/\*([^\/]+)/g, "(.+)")
-    .replace(/:([^\/]+)/g, "([^\\/]+)");
-  return new RegExp(`^${regexStr}$`);
+  if (pattern === "/") return /^\/$/;
+
+  const escapeRegex = (value: string) =>
+    value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const source = pattern
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => {
+      if (segment.startsWith(":")) return "([^/]+)";
+      if (segment.startsWith("*")) return "(.+)";
+      return escapeRegex(segment);
+    })
+    .join("\\/");
+
+  return new RegExp(`^\\/${source}$`);
 }
 
 /** Find all layout files from appDir to the page directory, root first. */
@@ -115,7 +143,7 @@ function findLayouts(pageFilePath: string, appDir: string): string[] {
   const layouts: string[] = [];
   let currentDir = path.dirname(pageFilePath);
 
-  while (currentDir.startsWith(appDir) || currentDir === appDir) {
+  while (isInsideDirectory(currentDir, appDir)) {
     const layoutPath = findConventionFile(currentDir, "layout");
     if (layoutPath) layouts.unshift(layoutPath);
 
@@ -135,7 +163,7 @@ function findErrorBoundary(
   appDir: string,
 ): string | undefined {
   let currentDir = path.dirname(pageFilePath);
-  while (currentDir.startsWith(appDir) || currentDir === appDir) {
+  while (isInsideDirectory(currentDir, appDir)) {
     const errorPath = findConventionFile(currentDir, "error");
     if (errorPath) return errorPath;
     if (currentDir === appDir) break;
@@ -152,7 +180,7 @@ function findLoadingComponent(
   appDir: string,
 ): string | undefined {
   let currentDir = path.dirname(pageFilePath);
-  while (currentDir.startsWith(appDir) || currentDir === appDir) {
+  while (isInsideDirectory(currentDir, appDir)) {
     const loadingPath = findConventionFile(currentDir, "loading");
     if (loadingPath) return loadingPath;
     if (currentDir === appDir) break;
@@ -168,7 +196,7 @@ function findLoadingComponent(
 function findMiddlewares(pageFilePath: string, appDir: string): string[] {
   const middlewares: string[] = [];
   let currentDir = path.dirname(pageFilePath);
-  while (currentDir.startsWith(appDir) || currentDir === appDir) {
+  while (isInsideDirectory(currentDir, appDir)) {
     const mwPath = findConventionFile(currentDir, "middleware");
     if (mwPath) middlewares.unshift(mwPath);
     if (currentDir === appDir) break;
@@ -202,82 +230,128 @@ export function discoverRoutes(
   const discover = () => {
     const routes: Route[] = [];
 
-    function scanDir(dir: string) {
+    function scanDir(dir: string, isRoot = false) {
+      let entries: string[];
       try {
-        const entries = readdirSync(dir);
-
-        for (const entry of entries) {
-          const fullPath = path.join(dir, entry);
-          const stats = statSync(fullPath);
-
-          if (stats.isDirectory()) {
-            if (IGNORED_DIR_NAMES.has(entry)) {
-              continue;
-            }
-            scanDir(fullPath);
-          } else if (entry.match(/^page\.(tsx?|jsx?)$/)) {
-            const { pattern, paramNames } = filePathToPattern(fullPath, appDir);
-            const regex = patternToRegex(pattern);
-            const layouts = findLayouts(fullPath, appDir);
-            const errorPath = findErrorBoundary(fullPath, appDir);
-            const loadingPath = findLoadingComponent(fullPath, appDir);
-            const middlewares = findMiddlewares(fullPath, appDir);
-
-            routes.push({
-              filePath: fullPath,
-              pattern,
-              pathname: pattern,
-              paramNames,
-              regex,
-              layouts,
-              errorPath,
-              loadingPath,
-              middlewares,
-              type: "page",
-            });
-          } else if (entry.match(/^route\.(tsx?|jsx?)$/)) {
-            // API route
-            const { pattern, paramNames } = filePathToPattern(fullPath, appDir);
-            const regex = patternToRegex(pattern);
-            const middlewares = findMiddlewares(fullPath, appDir);
-
-            routes.push({
-              filePath: fullPath,
-              pattern,
-              pathname: pattern,
-              paramNames,
-              regex,
-              layouts: [],
-              middlewares,
-              type: "api",
-            });
-          }
+        entries = readdirSync(dir);
+      } catch (error) {
+        if (isRoot) {
+          throw new Error(
+            `Could not scan app directory ${dir}: ${errorMessage(error)}`,
+            {
+              cause: error,
+            },
+          );
         }
-      } catch (error: any) {
-        // Directory doesn't exist or can't be read
-        console.warn(`Could not scan directory ${dir}:`, error.message);
+        if (!options.quiet) {
+          console.warn(
+            `Could not scan directory ${dir}: ${errorMessage(error)}`,
+          );
+        }
+        return;
+      }
+
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry);
+        let stats;
+        try {
+          stats = statSync(fullPath);
+        } catch (error) {
+          if (!options.quiet) {
+            console.warn(
+              `Could not inspect ${fullPath}: ${errorMessage(error)}`,
+            );
+          }
+          continue;
+        }
+
+        if (stats.isDirectory()) {
+          if (IGNORED_DIR_NAMES.has(entry)) {
+            continue;
+          }
+          scanDir(fullPath);
+        } else if (entry.match(/^page\.(tsx?|jsx?)$/)) {
+          const { pattern, paramNames } = filePathToPattern(fullPath, appDir);
+          const regex = patternToRegex(pattern);
+          const layouts = findLayouts(fullPath, appDir);
+          const errorPath = findErrorBoundary(fullPath, appDir);
+          const loadingPath = findLoadingComponent(fullPath, appDir);
+          const middlewares = findMiddlewares(fullPath, appDir);
+
+          routes.push({
+            filePath: fullPath,
+            pattern,
+            pathname: pattern,
+            paramNames,
+            regex,
+            layouts,
+            errorPath,
+            loadingPath,
+            middlewares,
+            type: "page",
+          });
+        } else if (entry.match(/^route\.(tsx?|jsx?)$/)) {
+          const { pattern, paramNames } = filePathToPattern(fullPath, appDir);
+          const regex = patternToRegex(pattern);
+          const middlewares = findMiddlewares(fullPath, appDir);
+
+          routes.push({
+            filePath: fullPath,
+            pattern,
+            pathname: pattern,
+            paramNames,
+            regex,
+            layouts: [],
+            middlewares,
+            type: "api",
+          });
+        }
       }
     }
 
-    scanDir(appDir);
+    scanDir(appDir, true);
 
-    // Sort routes by specificity (more specific routes first)
-    // Static routes before dynamic routes
+    // Different parameter names can still compile to the exact same matcher
+    // (`/[id]` and `/[slug]`). Reject those instead of silently choosing one
+    // based on directory traversal order.
+    const matchers = new Map<string, Route>();
+    for (const route of routes) {
+      const matcherKey = route.regex.source;
+      const existing = matchers.get(matcherKey);
+      if (existing) {
+        throw new Error(
+          `Route conflict for "${route.pattern}": ${path.relative(appDir, existing.filePath)} and ${path.relative(appDir, route.filePath)}`,
+        );
+      }
+      matchers.set(matcherKey, route);
+    }
+
+    // Order overlapping routes deterministically, comparing each URL segment.
+    // A static segment is more specific than a dynamic segment, which is more
+    // specific than a catch-all. This makes `/users/:id` beat `/:section/new`
+    // for `/users/new` without depending on filesystem enumeration order.
+    const segmentRank = (segment: string): number => {
+      if (segment.startsWith("*")) return 0;
+      if (segment.startsWith(":")) return 1;
+      return 2;
+    };
+
     routes.sort((a, b) => {
-      const aCatchAll = a.pattern.includes("*");
-      const bCatchAll = b.pattern.includes("*");
-      const aStatic = !a.pattern.includes(":") && !aCatchAll;
-      const bStatic = !b.pattern.includes(":") && !bCatchAll;
+      const aSegments = a.pattern.split("/").filter(Boolean);
+      const bSegments = b.pattern.split("/").filter(Boolean);
+      const sharedLength = Math.min(aSegments.length, bSegments.length);
 
-      if (aStatic && !bStatic) return -1;
-      if (!aStatic && bStatic) return 1;
-      if (aCatchAll && !bCatchAll) return 1;
-      if (!aCatchAll && bCatchAll) return -1;
+      for (let i = 0; i < sharedLength; i++) {
+        const rankDifference =
+          segmentRank(bSegments[i]) - segmentRank(aSegments[i]);
+        if (rankDifference !== 0) return rankDifference;
+      }
 
-      // If same class, sort by depth (deeper first)
-      const aDepth = a.pattern.split("/").length;
-      const bDepth = b.pattern.split("/").length;
-      return bDepth - aDepth;
+      if (aSegments.length !== bSegments.length) {
+        return bSegments.length - aSegments.length;
+      }
+
+      return a.pattern.localeCompare(b.pattern);
     });
 
     return routes;
@@ -287,7 +361,15 @@ export function discoverRoutes(
     return discover();
   }
 
-  return routeMeasure.measureSync("Discover routes", discover);
+  return measureRequiredSync(
+    routeMeasure,
+    {
+      label: "Discover routes",
+      appDir,
+      result: (value: Route[]) => ({ count: value.length }),
+    },
+    discover,
+  );
 }
 
 /**
@@ -303,7 +385,12 @@ export function matchRoute(
     if (match) {
       const params: Record<string, string> = {};
       route.paramNames.forEach((name, index) => {
-        params[name] = match[index + 1];
+        const rawValue = match[index + 1] ?? "";
+        try {
+          params[name] = decodeURIComponent(rawValue);
+        } catch {
+          params[name] = rawValue;
+        }
       });
 
       return { route, params };

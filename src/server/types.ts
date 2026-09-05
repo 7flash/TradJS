@@ -3,7 +3,7 @@
  */
 
 export type HandlerResponse =
-  Response | AsyncGenerator<string, void, unknown> | string | object;
+  Response | AsyncIterable<string> | string | object;
 
 export type Handler = (
   req: Request,
@@ -28,6 +28,7 @@ export interface FrontendAppOptions {
   viewport?: string;
   /** Enable same-origin cross-document View Transitions (default: true). */
   viewTransitions?: boolean;
+  /** @deprecated Build invalidation is automatic; retained for API compatibility. */
   rebuild?: boolean;
   serverData?: any;
   additionalAssets?: Array<{ path: string; type: string }>;

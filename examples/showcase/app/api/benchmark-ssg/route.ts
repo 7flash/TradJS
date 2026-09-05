@@ -1,121 +1,132 @@
 /**
- * SSG Benchmark API — compares SSG vs SSR vs Cached SSR response times
+ * SSG Benchmark API — compares steady-state SSG, cached SSR, and fresh SSR.
  *
- * Works in both dev and prod mode by manually populating the SSG cache
- * if it's empty (dev mode skips pre-render).
+ * The benchmark helper is intentionally independent of `measure-fn`: logging and
+ * tracing inside a microbenchmark would perturb the timings we are trying to
+ * compare. `measure-fn` remains the right tool for application observability;
+ * this file measures repeated samples and summarizes their distribution.
  */
 import { getPrerendered, setPrerendered } from "tradjs/server";
+import { createElement } from "tradjs/client/render";
+import { renderToString } from "tradjs/server/ssr";
+import PageComponent from "../../features/ssg/page";
 
-export async function GET(req: Request) {
-  const iterations = 100;
-  const results: {
-    method: string;
-    avgMs: number;
-    medianMs: number;
-    p99Ms: number;
-    description: string;
-  }[] = [];
+const ITERATIONS = 100;
+const WARMUP_ITERATIONS = 10;
+const SSG_PATH = "/features/ssg";
+const HTML_HEADERS = { "Content-Type": "text/html" } as const;
 
-  // Pre-populate SSG cache if empty (dev mode doesn't pre-render)
-  if (!getPrerendered("/features/ssg")) {
-    const { createElement } = await import("tradjs/client/render");
-    const { renderToString } = await import("tradjs/server/ssr");
-    const mod = await import("../../features/ssg/page");
-    const tree = createElement(mod.default, {});
-    const html = `<!DOCTYPE html>${renderToString(tree)}`;
-    setPrerendered("/features/ssg", html);
+interface BenchResult {
+  method: string;
+  avgMs: number;
+  medianMs: number;
+  p99Ms: number;
+  description: string;
+}
+
+function roundMs(value: number): number {
+  return Number(value.toFixed(4));
+}
+
+function percentile(sorted: readonly number[], fraction: number): number {
+  if (sorted.length === 0) return 0;
+  const index = Math.min(
+    sorted.length - 1,
+    Math.floor((sorted.length - 1) * fraction),
+  );
+  return sorted[index] ?? 0;
+}
+
+function summarize(
+  method: string,
+  description: string,
+  samples: readonly number[],
+): BenchResult {
+  const sorted = [...samples].sort((a, b) => a - b);
+  const avg = sorted.reduce((sum, value) => sum + value, 0) / sorted.length;
+
+  return {
+    method,
+    avgMs: roundMs(avg),
+    medianMs: roundMs(percentile(sorted, 0.5)),
+    p99Ms: roundMs(percentile(sorted, 0.99)),
+    description,
+  };
+}
+
+async function runBenchmark(
+  method: string,
+  description: string,
+  operation: () => Promise<void>,
+): Promise<BenchResult> {
+  for (let i = 0; i < WARMUP_ITERATIONS; i++) {
+    await operation();
   }
 
-  // ── Benchmark 1: SSR (fresh render every time) ───────────────────────
-  {
-    const { createElement } = await import("tradjs/client/render");
-    const { renderToString } = await import("tradjs/server/ssr");
-    const mod = await import("../../features/ssg/page");
-
-    const times: number[] = [];
-    for (let i = 0; i < iterations; i++) {
-      const start = performance.now();
-      const PageComponent = mod.default;
-      const tree = createElement(PageComponent, {});
-      const html = renderToString(tree);
-      const response = new Response(`<!DOCTYPE html>${html}`, {
-        headers: { "Content-Type": "text/html" },
-      });
-      await response.text();
-      times.push(performance.now() - start);
-    }
-    times.sort((a, b) => a - b);
-    results.push({
-      method: "SSR (fresh)",
-      avgMs: +(times.reduce((a, b) => a + b) / times.length).toFixed(4),
-      medianMs: +times[Math.floor(times.length / 2)].toFixed(4),
-      p99Ms: +times[Math.floor(times.length * 0.99)].toFixed(4),
-      description: "Component re-rendered to HTML on every request",
-    });
+  const samples: number[] = [];
+  for (let i = 0; i < ITERATIONS; i++) {
+    const start = performance.now();
+    await operation();
+    samples.push(performance.now() - start);
   }
 
-  // ── Benchmark 2: Cached SSR (render once, serve from JS string) ──────
-  {
-    const { createElement } = await import("tradjs/client/render");
-    const { renderToString } = await import("tradjs/server/ssr");
+  return summarize(method, description, samples);
+}
 
-    let cache: string | null = null;
-    const times: number[] = [];
-    for (let i = 0; i < iterations; i++) {
-      const start = performance.now();
-      if (!cache) {
-        const mod = await import("../../features/ssg/page");
-        const tree = createElement(mod.default, {});
-        cache = `<!DOCTYPE html>${renderToString(tree)}`;
-      }
-      const response = new Response(cache, {
-        headers: { "Content-Type": "text/html" },
-      });
-      await response.text();
-      times.push(performance.now() - start);
-    }
-    times.sort((a, b) => a - b);
-    results.push({
-      method: "Cached SSR",
-      avgMs: +(times.reduce((a, b) => a + b) / times.length).toFixed(4),
-      medianMs: +times[Math.floor(times.length / 2)].toFixed(4),
-      p99Ms: +times[Math.floor(times.length * 0.99)].toFixed(4),
-      description: "First render cached as string, re-served from JS variable",
-    });
+function renderPageHtml(): string {
+  const tree = createElement(PageComponent, {});
+  return `<!DOCTYPE html>${renderToString(tree)}`;
+}
+
+async function consumeHtml(html: string): Promise<void> {
+  const response = new Response(html, { headers: HTML_HEADERS });
+  await response.text();
+}
+
+export async function GET() {
+  if (!getPrerendered(SSG_PATH)) {
+    setPrerendered(SSG_PATH, renderPageHtml());
   }
 
-  // ── Benchmark 3: SSG (memory-served ArrayBuffer) ─────────────────────
-  {
-    const times: number[] = [];
-    for (let i = 0; i < iterations; i++) {
-      const start = performance.now();
-      const html = getPrerendered("/features/ssg");
-      if (html) {
-        const response = new Response(html, {
-          headers: { "Content-Type": "text/html" },
-        });
-        await response.text();
-      }
-      times.push(performance.now() - start);
-    }
-    times.sort((a, b) => a - b);
-    results.push({
-      method: "SSG (memory)",
-      avgMs: +(times.reduce((a, b) => a + b) / times.length).toFixed(4),
-      medianMs: +times[Math.floor(times.length / 2)].toFixed(4),
-      p99Ms: +times[Math.floor(times.length * 0.99)].toFixed(4),
-      description:
-        "Pre-rendered HTML served from memory (ArrayBuffer in builtAssets)",
-    });
-  }
+  // Warm the cached-SSR value before measuring steady-state cache serving.
+  const cachedSsrHtml = renderPageHtml();
 
-  // ── Summary ─────────────────────────────────────────────────────────
-  const ssrTime = results[0].avgMs;
-  const cachedTime = results[1].avgMs;
-  const ssgTime = results[2].avgMs;
+  // Run cases sequentially so they do not contend with each other and distort
+  // the very timings this endpoint is trying to compare.
+  const results = [
+    await runBenchmark(
+      "SSR (fresh)",
+      "Component rendered to HTML for every request",
+      async () => consumeHtml(renderPageHtml()),
+    ),
+    await runBenchmark(
+      "Cached SSR",
+      "Pre-rendered HTML string reused from an application cache",
+      async () => consumeHtml(cachedSsrHtml),
+    ),
+    await runBenchmark(
+      "SSG (memory)",
+      "Pre-rendered HTML string fetched from TradJS's in-memory SSG cache",
+      async () => {
+        const html = getPrerendered(SSG_PATH);
+        if (!html) {
+          throw new Error("SSG cache unexpectedly empty during benchmark");
+        }
+        await consumeHtml(html);
+      },
+    ),
+  ];
+
+  const byMethod = Object.fromEntries(
+    results.map((result) => [result.method, result]),
+  );
+  const ssrTime = byMethod["SSR (fresh)"]?.avgMs ?? 0;
+  const cachedTime = byMethod["Cached SSR"]?.avgMs ?? 0;
+  const ssgTime = byMethod["SSG (memory)"]?.avgMs ?? 0;
 
   return Response.json({
-    iterations,
+    iterations: ITERATIONS,
+    warmupIterations: WARMUP_ITERATIONS,
     results,
     summary: {
       ssgVsSsr:
@@ -130,7 +141,7 @@ export async function GET(req: Request) {
         ssgTime > 0 && cachedTime > 0
           ? `SSG is ${(cachedTime / ssgTime).toFixed(1)}x faster than Cached SSR`
           : "SSG and Cached SSR are both near-instant",
-      note: "SSG stores the full HTML as an ArrayBuffer in builtAssets at startup. Cached SSR stores the HTML as a JS string. Fresh SSR re-runs the component on every request. SSG avoids per-request string allocation entirely.",
+      note: "This compares steady-state request work after warmup. The SSG path reads TradJS's in-memory HTML cache; cached SSR reuses a local HTML string; fresh SSR re-renders the component each time.",
     },
   });
 }

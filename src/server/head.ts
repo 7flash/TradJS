@@ -1,118 +1,135 @@
 /**
- * <Head> Component — Declarative head management
+ * <Head> Component — request-scoped declarative head management.
  *
- * Collects <title>, <meta>, <link> etc. during SSR via a side-channel.
- * The app-router reads collected elements after renderToString() and
- * injects them into the <head> section of the final HTML.
- *
- * Usage in page components:
- * ```tsx
- * import { Head } from 'tradjs/web';
- *
- * export default function AboutPage() {
- *   return (
- *     <>
- *       <Head>
- *         <title>About Us</title>
- *         <meta name="description" content="Learn about our team" />
- *       </Head>
- *       <main>...</main>
- *     </>
- *   );
- * }
- * ```
+ * Head elements are collected in AsyncLocalStorage so concurrent SSR requests
+ * cannot reset or consume each other's metadata. A small fallback collector is
+ * retained for direct/manual renderToString() usage outside a managed context.
  */
 
-import {
-  Fragment,
-  type VNode,
-  type Child,
-  type Component,
-} from "../client/types";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { Fragment, type VNode, type Child } from "../client/types";
+import { escapeHtml, htmlAttributeName, isSafeHtmlName } from "./html";
 
-// ─── Side-Channel: Collected head elements ──────────────────────────────────────
+const headStorage = new AsyncLocalStorage<string[]>();
+let fallbackHeadElements: string[] = [];
 
-let _headElements: string[] = [];
+function currentHeadElements(): string[] {
+  return headStorage.getStore() ?? fallbackHeadElements;
+}
 
-/** Reset head elements before each SSR pass. */
+/** Reset the active collector, or the manual fallback collector when unscoped. */
 export function resetHead(): void {
-  _headElements = [];
+  const elements = headStorage.getStore();
+  if (elements) {
+    elements.length = 0;
+  } else {
+    fallbackHeadElements = [];
+  }
 }
 
-/** Get collected head elements after SSR. Returns raw HTML strings. */
+/** Return a snapshot so callers cannot mutate the active collector. */
 export function getHeadElements(): string[] {
-  return _headElements;
+  return [...currentHeadElements()];
 }
 
-// ─── Head Element Rendering ─────────────────────────────────────────────────────
+export interface HeadCollection<T> {
+  value: T;
+  head: string[];
+}
+
+/** Run synchronous SSR with an isolated head collector. */
+export function collectHead<T>(fn: () => T): HeadCollection<T> {
+  const elements: string[] = [];
+  const value = headStorage.run(elements, fn);
+  return { value, head: [...elements] };
+}
+
+/** Run async SSR with an isolated head collector that survives awaits. */
+export async function collectHeadAsync<T>(
+  fn: () => Promise<T>,
+): Promise<HeadCollection<T>> {
+  const elements: string[] = [];
+  const value = await headStorage.run(elements, fn);
+  return { value, head: [...elements] };
+}
 
 const VOID_ELEMENTS = new Set(["meta", "link", "base", "col"]);
 
-function renderHeadChild(child: VNode | Child): string {
+type HeadChild = Child | HeadChild[];
+
+function renderHeadChild(child: HeadChild): string {
   if (
     child === null ||
     child === undefined ||
     child === true ||
     child === false
-  )
+  ) {
     return "";
-  if (typeof child === "string") return child;
-  if (typeof child === "number") return String(child);
+  }
+  if (typeof child === "string" || typeof child === "number") {
+    return escapeHtml(child);
+  }
   if (Array.isArray(child)) return child.map(renderHeadChild).join("");
 
   const vnode = child as VNode;
   if (!vnode.type || typeof vnode.type === "function") return "";
 
+  const props = vnode.props ?? {};
+  if (vnode.type === Fragment) {
+    return renderHeadChild((props.children ?? null) as HeadChild);
+  }
+
   const tag = vnode.type as string;
+  if (!isSafeHtmlName(tag)) return "";
   let html = `<${tag}`;
 
-  for (const [key, value] of Object.entries(vnode.props || {})) {
-    if (key === "children" || key === "key" || key === "ref") continue;
+  for (const [key, value] of Object.entries(props)) {
+    if (
+      key === "children" ||
+      key === "key" ||
+      key === "ref" ||
+      key === "dangerouslySetInnerHTML" ||
+      key.startsWith("on") ||
+      !isSafeHtmlName(key)
+    ) {
+      continue;
+    }
     if (value === undefined || value === null || value === false) continue;
 
-    if (key === "className" || key === "class") {
-      html += ` class="${String(value)}"`;
-    } else if (value === true) {
-      html += ` ${key}`;
+    const attribute = htmlAttributeName(key);
+    if (value === true) {
+      html += ` ${attribute}`;
     } else {
-      html += ` ${key}="${String(value)}"`;
+      html += ` ${attribute}="${escapeHtml(value)}"`;
     }
   }
 
   html += ">";
-
   if (VOID_ELEMENTS.has(tag)) return html;
 
-  // Render children (e.g. <title>Page Title</title>)
-  const { children } = vnode.props;
-  if (children !== undefined && children !== null) {
-    if (Array.isArray(children)) {
-      html += children.map(renderHeadChild).join("");
-    } else {
-      html += renderHeadChild(children);
-    }
+  const rawHtml = props.dangerouslySetInnerHTML;
+  if (rawHtml && typeof rawHtml === "object" && "__html" in rawHtml) {
+    html += String((rawHtml as { __html?: unknown }).__html ?? "");
+  } else if (props.children !== undefined && props.children !== null) {
+    html += renderHeadChild(props.children as HeadChild);
   }
 
   html += `</${tag}>`;
   return html;
 }
 
-// ─── Head Component ─────────────────────────────────────────────────────────────
-
-/**
- * The Head component. During SSR, its children are collected into
- * the side-channel instead of being rendered into the body.
- * Returns null (renders nothing in the body).
- */
+/** Collect head children and render nothing into the body. */
 export function Head(props: { children?: Child | Child[] }): null {
   const { children } = props;
-  if (!children) return null;
+  if (children === undefined || children === null) return null;
 
   const childArray = Array.isArray(children) ? children : [children];
+  const elements = currentHeadElements();
+
   for (const child of childArray) {
     if (child && typeof child === "object" && "type" in child) {
       const html = renderHeadChild(child);
-      if (html) _headElements.push(html);
+      if (html) elements.push(html);
     }
   }
 

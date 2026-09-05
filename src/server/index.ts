@@ -56,7 +56,8 @@ export { discoverRoutes, matchRoute } from "./router";
 export { renderToString, renderToStringAsync } from "./ssr";
 
 // Head component (declarative <head> management)
-export { Head } from "./head";
+export { Head, collectHead, collectHeadAsync } from "./head";
+export type { HeadCollection } from "./head";
 
 // SSG (Static Site Generation)
 export {

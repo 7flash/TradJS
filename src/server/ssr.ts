@@ -1,15 +1,8 @@
 /**
- * tradjs — Server-Side Rendering
+ * TradJS server-side renderer.
  *
- * String-based HTML renderer for VNodes. This module has ZERO DOM dependencies
- * and runs exclusively on the server. It is never bundled into client scripts.
- *
- * Lives at src/server/ssr.ts (NOT inside src/client/) because src/client/ is bundled
- * and served to the browser. SSR code must never appear in client bundles.
- *
- * The client renderer (client/render.ts) and this SSR renderer share types
- * but have completely separate implementations. SSR produces strings via
- * concatenation; client produces real DOM nodes via diffing reconciler.
+ * Sync and async rendering deliberately share the same element/attribute
+ * serialization helpers so escaping and markup semantics cannot drift.
  */
 
 import {
@@ -17,26 +10,10 @@ import {
   type VNode,
   type Child,
   type Component,
+  type Props,
 } from "../client/types";
 import { Head } from "./head";
-
-// ─── HTML Escaping ─────────────────────────────────────────────────────
-
-const ESCAPE_MAP: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;",
-};
-
-const ESCAPE_RE = /[&<>"']/g;
-
-function escapeHtml(str: string): string {
-  return str.replace(ESCAPE_RE, (ch) => ESCAPE_MAP[ch]);
-}
-
-// ─── Void Elements ─────────────────────────────────────────────────────
+import { escapeHtml, htmlAttributeName, isSafeHtmlName } from "./html";
 
 const VOID_ELEMENTS = new Set([
   "meta",
@@ -55,7 +32,65 @@ const VOID_ELEMENTS = new Set([
   "wbr",
 ]);
 
-// ─── renderToString ────────────────────────────────────────────────────
+function styleObjectToString(style: Record<string, unknown>): string {
+  return Object.entries(style)
+    .filter(
+      ([, value]) => value !== undefined && value !== null && value !== false,
+    )
+    .map(([key, value]) => {
+      const cssName = key.startsWith("--")
+        ? key
+        : key.replace(/([A-Z])/g, "-$1").toLowerCase();
+      return `${cssName}:${String(value)}`;
+    })
+    .join(";");
+}
+
+function renderAttributes(props: Props): string {
+  let html = "";
+
+  for (const [key, value] of Object.entries(props)) {
+    if (
+      key === "children" ||
+      key === "key" ||
+      key === "ref" ||
+      key === "dangerouslySetInnerHTML" ||
+      key.startsWith("on") ||
+      value === undefined ||
+      value === null ||
+      value === false ||
+      !isSafeHtmlName(key)
+    ) {
+      continue;
+    }
+
+    const attributeName = htmlAttributeName(key);
+
+    if (key === "style" && typeof value === "object") {
+      const style = styleObjectToString(value as Record<string, unknown>);
+      if (style) html += ` style="${escapeHtml(style)}"`;
+      continue;
+    }
+
+    if (value === true) {
+      html += ` ${attributeName}`;
+    } else {
+      html += ` ${attributeName}="${escapeHtml(value)}"`;
+    }
+  }
+
+  return html;
+}
+
+function renderOpenTag(tagName: string, props: Props): string {
+  return `<${tagName}${renderAttributes(props)}>`;
+}
+
+function rawInnerHtml(props: Props): string | null {
+  const raw = props.dangerouslySetInnerHTML;
+  if (!raw || typeof raw !== "object" || !("__html" in raw)) return null;
+  return String((raw as { __html?: unknown }).__html ?? "");
+}
 
 export function renderToString(vnode: VNode | Child): string {
   if (
@@ -63,25 +98,26 @@ export function renderToString(vnode: VNode | Child): string {
     vnode === undefined ||
     vnode === true ||
     vnode === false
-  )
+  ) {
     return "";
-  if (typeof vnode === "string") return escapeHtml(vnode);
-  if (typeof vnode === "number") return String(vnode);
-  if (Array.isArray(vnode))
+  }
+  if (typeof vnode === "string" || typeof vnode === "number") {
+    return escapeHtml(vnode);
+  }
+  if (Array.isArray(vnode)) {
     return vnode.map((child) => renderToString(child)).join("");
+  }
 
   const { type, props } = vnode as VNode;
 
-  // Fragment — render children only
   if (type === Fragment) return renderChildrenToString(props?.children);
 
-  // Component — execute and render result (async support)
   if (typeof type === "function") {
-    // Head component: call for side-channel collection, render nothing in body
     if (type === Head) {
-      (type as any)(props || {});
+      Head(props || {});
       return "";
     }
+
     const result = (type as Component)(props || {});
     if (result instanceof Promise) {
       throw new Error(
@@ -91,60 +127,16 @@ export function renderToString(vnode: VNode | Child): string {
     return renderToString(result);
   }
 
-  // HTML Element
   const tagName = type as string;
-  let html = `<${tagName}`;
-
   const propsObj = props || {};
-  for (const [key, value] of Object.entries(propsObj)) {
-    if (
-      key === "children" ||
-      key === "key" ||
-      key === "ref" ||
-      key.startsWith("on")
-    )
-      continue;
-    if (value === undefined || value === null || value === false) continue;
-
-    if (key === "className" || key === "class") {
-      html += ` class="${escapeHtml(String(value))}"`;
-      continue;
-    }
-
-    if (key === "style" && typeof value === "object") {
-      const styleStr = Object.entries(value)
-        .map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}:${v}`)
-        .join(";");
-      html += ` style="${escapeHtml(styleStr)}"`;
-      continue;
-    }
-
-    if (key === "dangerouslySetInnerHTML") continue;
-
-    if (value === true) {
-      html += ` ${key}`;
-    } else {
-      html += ` ${key}="${escapeHtml(String(value))}"`;
-    }
-  }
-
-  html += ">";
-
-  // Void elements self-close
+  let html = renderOpenTag(tagName, propsObj);
   if (VOID_ELEMENTS.has(tagName)) return html;
 
-  // Inner content
-  if (propsObj.dangerouslySetInnerHTML) {
-    html += propsObj.dangerouslySetInnerHTML.__html;
-  } else {
-    html += renderChildrenToString(propsObj.children);
-  }
-
+  const raw = rawInnerHtml(propsObj);
+  html += raw ?? renderChildrenToString(propsObj.children);
   html += `</${tagName}>`;
   return html;
 }
-
-// ─── renderToStringAsync (async support) ─────────────────────────────────
 
 export async function renderToStringAsync(
   vnode: VNode | Child | Promise<VNode | Child>,
@@ -154,102 +146,51 @@ export async function renderToStringAsync(
     vnode === undefined ||
     vnode === true ||
     vnode === false
-  )
+  ) {
     return "";
-  if (typeof vnode === "string") return vnode;
-  if (typeof vnode === "number") return String(vnode);
-  if (Array.isArray(vnode)) {
-    const results = await Promise.all(
-      vnode.map((child) => renderToStringAsync(child)),
-    );
-    return results.join("");
   }
-
-  // Handle Promise from async component
+  if (typeof vnode === "string" || typeof vnode === "number") {
+    return escapeHtml(vnode);
+  }
+  if (Array.isArray(vnode)) {
+    let html = "";
+    for (const child of vnode) html += await renderToStringAsync(child);
+    return html;
+  }
   if (vnode instanceof Promise) {
-    const resolved = await vnode;
-    return renderToStringAsync(resolved);
+    return renderToStringAsync(await vnode);
   }
 
   const { type, props } = vnode as VNode;
 
-  // Fragment — render children only
-  if (type === Fragment) {
-    const children = props?.children;
-    return renderChildrenAsync(children);
-  }
+  if (type === Fragment) return renderChildrenAsync(props?.children);
 
-  // Component — execute and render result (async support)
   if (typeof type === "function") {
-    // Head component: call for side-channel collection, render nothing in body
     if (type === Head) {
-      (type as any)(props || {});
+      Head(props || {});
       return "";
     }
+
     const result = (type as Component)(props || {});
-    const html = await renderToStringAsync(result);
-    return html;
+    return renderToStringAsync(result);
   }
 
-  // HTML Element
   const tagName = type as string;
-  let html = `<${tagName}`;
-
   const propsObj = props || {};
-  for (const [key, value] of Object.entries(propsObj)) {
-    if (
-      key === "children" ||
-      key === "key" ||
-      key === "ref" ||
-      key.startsWith("on")
-    )
-      continue;
-    if (value === undefined || value === null || value === false) continue;
-
-    if (key === "className" || key === "class") {
-      html += ` class="${escapeHtml(String(value))}"`;
-      continue;
-    }
-
-    if (key === "style" && typeof value === "object") {
-      const styleStr = Object.entries(value)
-        .map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}:${v}`)
-        .join(";");
-      html += ` style="${escapeHtml(styleStr)}"`;
-      continue;
-    }
-
-    if (key === "dangerouslySetInnerHTML") continue;
-
-    if (value === true) {
-      html += ` ${key}`;
-    } else {
-      html += ` ${key}="${escapeHtml(String(value))}"`;
-    }
-  }
-
-  html += ">";
-
-  // Void elements self-close
+  let html = renderOpenTag(tagName, propsObj);
   if (VOID_ELEMENTS.has(tagName)) return html;
 
-  // Inner content
-  if (propsObj.dangerouslySetInnerHTML) {
-    html += propsObj.dangerouslySetInnerHTML.__html;
-  } else {
-    html += await renderChildrenAsync(propsObj.children);
-  }
-
+  const raw = rawInnerHtml(propsObj);
+  html += raw ?? (await renderChildrenAsync(propsObj.children));
   html += `</${tagName}>`;
   return html;
 }
 
-// ─── Children Helper ───────────────────────────────────────────────────
-
 function renderChildrenToString(children: Child | Child[] | undefined): string {
   if (children === undefined || children === null) return "";
-  if (Array.isArray(children))
-    return children.map((c) => renderToString(c)).join("");
+  if (Array.isArray(children)) {
+    return children.map((child) => renderToString(child)).join("");
+  }
   return renderToString(children);
 }
 
@@ -258,10 +199,9 @@ async function renderChildrenAsync(
 ): Promise<string> {
   if (children === undefined || children === null) return "";
   if (Array.isArray(children)) {
-    const results = await Promise.all(
-      children.map((c) => renderToStringAsync(c)),
-    );
-    return results.join("");
+    let html = "";
+    for (const child of children) html += await renderToStringAsync(child);
+    return html;
   }
   return renderToStringAsync(children);
 }

@@ -1,110 +1,150 @@
 /**
  * HTTP Server
  *
- * Handles server creation, request dispatch, error handling,
- * and graceful shutdown for Last.js applications.
+ * Handles server creation, request dispatch, error handling, port discovery,
+ * and graceful shutdown for TradJS applications.
  */
 
 import { unlink } from "fs/promises";
 import net from "node:net";
-import { httpMeasure } from "./measure";
-import { builtAssets, getContentType } from "./build";
+import { errorMessage, errorStack, serializeError } from "./errors";
+import { escapeHtml } from "./html";
+import { httpMeasure, measureRequired } from "./measure";
+import { builtAssets } from "./build";
+import { normalizeHandlerResponse } from "./response";
 import type { Handler } from "./types";
 
 const isDev = process.env.NODE_ENV !== "production";
+const PORT_SCAN_SIZE = 100;
+const PORT_PROBE_TIMEOUT_MS = 200;
 
-// ─── Global Error Handlers ──────────────────────────────────────────────────────
-// Prevent the Bun process from dying on unhandled errors.
-// ALWAYS log full stack traces — errors must be visible in both dev and production.
-
-process.on("unhandledRejection", (reason: any) => {
-  console.error("[tradjs] Unhandled Promise Rejection (server kept alive):");
-  console.error(
-    reason instanceof Error ? (reason.stack ?? reason.message) : reason,
-  );
-});
-
-process.on("uncaughtException", (error: Error) => {
-  console.error("[tradjs] Uncaught Exception (server kept alive):");
-  console.error(error.stack ?? error.message);
-});
-
-// Global cleanup function for unix socket
-let cleanupUnixSocket: (() => Promise<void>) | null = null;
-
-function generateRequestId(): string {
-  return Math.random().toString(36).substring(2, 10);
+export interface HttpServeOptions {
+  port?: number;
+  unix?: string;
+  /** Passed through to Bun.serve. Kept generic so applications can use Bun's websocket API. */
+  websocket?: unknown;
+  /** Opt in to process-wide SIGINT/SIGTERM ownership (intended for the CLI). */
+  handleSignals?: boolean;
 }
 
-function isAddressInUseError(error: any): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+function generateRequestId(): string {
+  return crypto.randomUUID().replaceAll("-", "").slice(0, 12);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isAddressInUseError(error: unknown): boolean {
+  const code = isRecord(error) ? error.code : undefined;
+  const errno = isRecord(error) ? error.errno : undefined;
+  const message = errorMessage(error);
+
   return (
-    error?.code === "EADDRINUSE" ||
-    error?.errno === 10048 ||
+    code === "EADDRINUSE" ||
+    errno === 10048 ||
     message.includes("EADDRINUSE") ||
     message.includes("Address already in use") ||
     message.includes("Failed to listen")
   );
 }
 
+function createErrorResponse(error: unknown, requestId: string): Response {
+  const message = errorMessage(error);
+  const stack = errorStack(error);
+
+  const body = isDev
+    ? `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Server Error</title>
+    <style>
+      body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; padding: 20px; background: #fff1f1; color: #333; }
+      pre { background: #fdfdfd; padding: 15px; border-radius: 4px; border: 1px solid #ddd; overflow-x: auto; white-space: pre-wrap; }
+      h1 { color: #d92626; }
+    </style>
+  </head>
+  <body>
+    <h1>Server Error</h1>
+    <h3>Error</h3>
+    <pre>${escapeHtml(message)}</pre>
+    <h3>Stack Trace</h3>
+    <pre>${escapeHtml(stack)}</pre>
+    <h3>Details</h3>
+    <pre>${escapeHtml(serializeError(error))}</pre>
+  </body>
+</html>`
+    : "Internal Server Error";
+
+  return new Response(body, {
+    status: 500,
+    headers: {
+      "Content-Type": isDev
+        ? "text/html; charset=utf-8"
+        : "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Request-ID": requestId,
+    },
+  });
+}
+
+function parsePort(value: string | undefined): number | undefined {
+  if (!value || !/^\d+$/.test(value)) return undefined;
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 0 && port <= 65_535
+    ? port
+    : undefined;
+}
+
 /**
- * Create and start a Last.js HTTP server.
+ * Create and start a TradJS HTTP server.
  *
- * Automatically determines port or unix socket from BUN_PORT env var or CLI arg.
- * Handles cleanup and graceful shutdown automatically.
+ * Determines the listening address from explicit options or BUN_PORT.
+ * CLI arguments are parsed by the CLI layer so this low-level API does not
+ * depend on ambient process.argv state when embedded in another program.
  */
-export async function serve(
-  handler: Handler,
-  options?: { port?: number; unix?: string; websocket?: any },
-) {
-  // Automatic detection logic
+export async function serve(handler: Handler, options: HttpServeOptions = {}) {
   let port: number | undefined;
   let unix: string | undefined;
   let shouldAutoFindPort = false;
   let autoFindStartPort = 3000;
 
-  if (options?.port !== undefined) {
+  if (options.port !== undefined) {
     port = options.port;
-  } else if (options?.unix !== undefined) {
+  } else if (options.unix !== undefined) {
     unix = options.unix;
   } else {
     const bunPort = process.env.BUN_PORT;
-    const rawCliArg = process.argv[2];
-    // `tradjs serve` has already been parsed by the framework CLI. The word
-    // "serve" is a command token, not an implicit Unix socket path.
-    const cliArg = rawCliArg === "serve" ? undefined : rawCliArg;
-    const isFlag = cliArg?.startsWith("-");
 
     if (bunPort) {
-      const parsedPort = parseInt(bunPort, 10);
-      if (!isNaN(parsedPort)) {
+      const parsedPort = parsePort(bunPort);
+      if (parsedPort !== undefined) {
         port = parsedPort;
-        shouldAutoFindPort = true;
-        autoFindStartPort = parsedPort;
+        shouldAutoFindPort = parsedPort !== 0;
+        autoFindStartPort = parsedPort || autoFindStartPort;
       } else {
         unix = bunPort;
-      }
-    } else if (cliArg && !isFlag) {
-      const parsedPort = parseInt(cliArg, 10);
-      if (!isNaN(parsedPort)) {
-        port = parsedPort;
-        shouldAutoFindPort = true;
-        autoFindStartPort = parsedPort;
-      } else {
-        unix = cliArg;
       }
     }
   }
 
-  if (!port && !unix) {
+  if (port === undefined && unix === undefined) {
     shouldAutoFindPort = true;
     port = autoFindStartPort;
   }
 
-  // On Windows/Bun, attempting to bind an occupied port may not reliably throw
-  // before a misleading server object is returned. Preflight using real TCP
-  // connection checks against both loopback families whenever automatic port
-  // selection is enabled.
+  if (port !== undefined && unix !== undefined) {
+    throw new Error("Cannot specify both port and unix socket");
+  }
+
+  if (
+    port !== undefined &&
+    (port < 0 || port > 65_535 || !Number.isInteger(port))
+  ) {
+    throw new Error(`Invalid port: ${port}`);
+  }
+
   if (!unix && shouldAutoFindPort) {
     const requestedPort = port ?? autoFindStartPort;
     port = await findAvailablePort(requestedPort);
@@ -113,234 +153,112 @@ export async function serve(
     }
   }
 
-  if (port !== undefined && unix) {
-    throw new Error("Cannot specify both port and unix socket");
-  }
-
-  // Handle unix socket cleanup BEFORE starting server
+  let cleanupUnixSocket: (() => Promise<void>) | undefined;
   if (unix) {
     if (!unix.startsWith("\0")) {
       await unlink(unix).catch(() => {});
     }
     cleanupUnixSocket = async () => {
-      if (unix && !unix.startsWith("\0")) {
+      if (!unix.startsWith("\0")) {
         await unlink(unix).catch(() => {});
       }
     };
   }
 
-  const hasWebSocket = !!options?.websocket;
-  const args: any = {
+  const hasWebSocket = options.websocket !== undefined;
+  const args: Record<string, unknown> = {
     idleTimeout: 0,
     development: isDev,
     async fetch(req: Request) {
-      let requestId = req.headers.get("X-Request-ID");
-      if (!requestId) {
-        requestId = generateRequestId();
-        req.headers.set("X-Request-ID", requestId);
-      }
+      const requestId = req.headers.get("X-Request-ID") || generateRequestId();
+      const url = new URL(req.url);
+      const pathname = url.pathname;
 
       try {
-        const url = new URL(req.url);
-        const pathname = url.pathname;
-
-        // WebSocket upgrade — when a websocket handler is configured,
-        // automatically upgrade requests with the Upgrade header
-        if (
-          hasWebSocket &&
-          req.headers.get("upgrade")?.toLowerCase() === "websocket"
-        ) {
-          const upgraded = server.upgrade(req, { data: { url, pathname } });
-          if (upgraded) return undefined as any; // Bun handles the response
-          return new Response("WebSocket upgrade failed", { status: 400 });
-        }
-
-        // Check for built assets in memory first
-        if (builtAssets[pathname]) {
-          const { content, contentType } = builtAssets[pathname];
-          return new Response(content, {
-            headers: {
-              "Content-Type": contentType,
-              "Cache-Control": isDev
-                ? "no-cache"
-                : "public, max-age=31536000, immutable",
-            },
-          });
-        }
-
-        // Handle request — scoped measurement observes timing.
-        // Errors throw by default; catch() is the explicit 500 fallback.
-        const response = await httpMeasure.measure.root(
+        return await measureRequired(
+          httpMeasure,
           {
-            start: () => `${req.method} ${pathname} ${requestId}`,
-            end: (result) => {
-              if (result instanceof Response) {
-                return { status: result.status };
-              }
+            label: "HTTP dispatch",
+            method: req.method,
+            pathname,
+            requestId,
+            result: (response: Response | undefined) =>
+              response
+                ? { status: response.status }
+                : { websocket: "upgraded" },
+          },
+          async () => {
+            if (
+              hasWebSocket &&
+              req.headers.get("upgrade")?.toLowerCase() === "websocket"
+            ) {
+              const upgraded = server.upgrade(req, { data: { url, pathname } });
+              if (upgraded) return undefined;
 
-              if (
-                typeof result === "object" &&
-                result != null &&
-                (result as any)[Symbol.asyncIterator]
-              ) {
-                return { type: "stream" };
-              }
+              return normalizeHandlerResponse(
+                new Response("WebSocket upgrade failed", { status: 400 }),
+                { requestId },
+              );
+            }
 
-              if (typeof result === "string") {
-                return { type: "html", bytes: result.length };
-              }
-
-              return { type: "json" };
-            },
-            catch: (error: unknown) => {
-              console.error("[Server Error]", error);
-              const errorDetails =
-                error instanceof Error ? error.message : String(error);
-              const stackTrace =
-                error instanceof Error && error.stack
-                  ? error.stack
-                  : "No stack trace available";
-              const body = isDev
-                ? `<pre style="font-family:monospace;background:#fff1f1;padding:20px;color:#d92626">${errorDetails}\n\n${stackTrace}</pre>`
-                : "Internal Server Error";
-              return new Response(body, {
-                status: 500,
+            const asset = builtAssets[pathname];
+            if (asset) {
+              return new Response(asset.content, {
                 headers: {
-                  "Content-Type": "text/html",
-                  "Cache-Control": "no-store",
+                  "Content-Type": asset.contentType,
+                  "Cache-Control": isDev
+                    ? "no-cache"
+                    : "public, max-age=31536000, immutable",
+                  "X-Request-ID": requestId,
                 },
               });
-            },
+            }
+
+            const response = await handler(req);
+            return normalizeHandlerResponse(response, {
+              requestId,
+              onStreamError: (error) =>
+                console.error(`[tradjs] Stream error (${requestId}):`, error),
+            });
           },
-          () => handler(req),
         );
-
-        // Async iterator (streaming)
-        if (
-          typeof response === "object" &&
-          response != null &&
-          (response as any)[Symbol.asyncIterator]
-        ) {
-          const stream = new ReadableStream({
-            async start(controller) {
-              try {
-                for await (const chunk of response as AsyncGenerator<string>) {
-                  controller.enqueue(new TextEncoder().encode(chunk));
-                }
-              } catch (error) {
-                console.error("Stream error:", error);
-              } finally {
-                controller.close();
-              }
-            },
-          });
-          return new Response(stream, {
-            headers: {
-              "Content-Type": "text/html; charset=utf-8",
-              "Transfer-Encoding": "chunked",
-              "X-Request-ID": requestId,
-            },
-          });
-        }
-
-        if (response instanceof Response) {
-          const headers = new Headers(response.headers);
-          headers.set("X-Request-ID", requestId);
-          return new Response(response.body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: headers,
-          });
-        }
-
-        if (typeof response === "string") {
-          return new Response(response, {
-            headers: {
-              "Content-Type": "text/html; charset=utf-8",
-              "X-Request-ID": requestId,
-            },
-          });
-        }
-
-        return new Response(JSON.stringify(response), {
-          headers: { "Content-Type": "application/json" },
-        });
-      } catch (error: any) {
-        console.error("[Server Error]", error);
-        const errorDetails = error?.message ?? String(error);
-        const stackTrace = error?.stack ?? "No stack trace available";
-        const detailedLogs = JSON.stringify(
-          error,
-          Object.getOwnPropertyNames(error),
-          2,
-        );
-
-        const body = isDev
-          ? `<!DOCTYPE html>
-              <html>
-                <head>
-                  <title>Server Error</title>
-                  <style>
-                    body { font-family: monospace; padding: 20px; background: #fff1f1; color: #333; }
-                    pre { background: #fdfdfd; padding: 15px; border-radius: 4px; border: 1px solid #ddd; overflow-x: auto; }
-                    h1 { color: #d92626; }
-                  </style>
-                </head>
-                <body>
-                  <h1>Server Error</h1>
-                  <h3>Error:</h3>
-                  <pre>${errorDetails}</pre>
-                  <h3>Stack Trace:</h3>
-                  <pre>${stackTrace}</pre>
-                  <h3>Full Error Object:</h3>
-                  <pre>${detailedLogs}</pre>
-                </body>
-              </html>`
-          : "Internal Server Error";
-
-        return new Response(body, {
-          status: 500,
-          headers: {
-            "Content-Type": "text/html",
-            "Cache-Control": "no-store",
-          },
-        });
+      } catch (error) {
+        // The failed HTTP span already records the exception. Avoid a second
+        // unconditional log so MEASURE_SILENT/custom loggers remain authoritative.
+        return createErrorResponse(error, requestId);
       }
     },
     error(error: Error) {
-      console.error("[Bun Server Error]", error);
+      console.error("[tradjs] Bun server error:", error);
       return new Response("Internal Server Error", {
         status: 500,
-        headers: { "Content-Type": "text/plain", "Cache-Control": "no-store" },
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-store",
+        },
       });
     },
   };
 
-  // Pass through WebSocket handler if provided
-  if (options?.websocket) {
-    args.websocket = options.websocket;
-  }
+  if (options.websocket !== undefined) args.websocket = options.websocket;
+  if (unix) args.unix = unix;
+  else args.port = port;
 
-  if (unix) {
-    args.unix = unix;
-  } else {
-    args.port = port;
-  }
-
-  let server: any;
+  let server: ReturnType<typeof Bun.serve>;
   try {
-    server = Bun.serve(args);
-  } catch (err: any) {
-    if (!unix && shouldAutoFindPort && isAddressInUseError(err)) {
+    server = Bun.serve(args as Parameters<typeof Bun.serve>[0]);
+  } catch (error) {
+    if (!unix && shouldAutoFindPort && isAddressInUseError(error)) {
       const fallbackStart = Math.max(
         (port ?? autoFindStartPort) + 1,
         autoFindStartPort + 1,
       );
-      args.port = await findAvailablePort(fallbackStart);
-      console.log(`⚠️  Port ${port} is busy, using port ${args.port}`);
-      server = Bun.serve(args);
+      const fallbackPort = await findAvailablePort(fallbackStart);
+      args.port = fallbackPort;
+      console.log(`⚠️  Port ${port} is busy, using port ${fallbackPort}`);
+      server = Bun.serve(args as Parameters<typeof Bun.serve>[0]);
     } else {
-      throw err;
+      throw error;
     }
   }
 
@@ -350,18 +268,21 @@ export async function serve(
     console.log(`🦊 tradjs server running at http://localhost:${server.port}`);
   }
 
-  // Graceful shutdown
-  const shutdown = async (signal: string) => {
-    console.log(`🛑 Received ${signal}, shutting down gracefully...`);
-    if (cleanupUnixSocket) {
-      await cleanupUnixSocket();
-    }
-    server.stop?.();
-    process.exit(0);
-  };
+  if (options.handleSignals) {
+    const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
+      console.log(`🛑 Received ${signal}, shutting down gracefully...`);
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      await cleanupUnixSocket?.();
+      server.stop?.();
+      process.exit(0);
+    };
+    const onSigint = () => void shutdown("SIGINT");
+    const onSigterm = () => void shutdown("SIGTERM");
 
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.once("SIGINT", onSigint);
+    process.once("SIGTERM", onSigterm);
+  }
 
   return server;
 }
@@ -369,7 +290,7 @@ export async function serve(
 // ─── Port Discovery ─────────────────────────────────────────────────────────────
 
 async function canConnectToPort(port: number, host: string): Promise<boolean> {
-  return await new Promise<boolean>((resolve) => {
+  return new Promise<boolean>((resolve) => {
     const socket = net.createConnection({ port, host });
 
     const finish = (result: boolean) => {
@@ -381,7 +302,7 @@ async function canConnectToPort(port: number, host: string): Promise<boolean> {
     socket.once("connect", () => finish(true));
     socket.once("timeout", () => finish(false));
     socket.once("error", () => finish(false));
-    socket.setTimeout(200);
+    socket.setTimeout(PORT_PROBE_TIMEOUT_MS);
   });
 }
 
@@ -396,15 +317,15 @@ async function isPortInUse(port: number): Promise<boolean> {
   );
 }
 
-export async function findAvailablePort(
-  startPort: number = 3000,
-): Promise<number> {
-  for (let port = startPort; port < startPort + 100; port++) {
-    if (!(await isPortInUse(port))) {
-      return port;
-    }
+export async function findAvailablePort(startPort = 3000): Promise<number> {
+  if (!Number.isInteger(startPort) || startPort < 1 || startPort > 65_535) {
+    throw new Error(`Invalid start port: ${startPort}`);
   }
-  throw new Error(
-    `No available port found in range ${startPort}-${startPort + 99}`,
-  );
+
+  const endPort = Math.min(65_535, startPort + PORT_SCAN_SIZE - 1);
+  for (let port = startPort; port <= endPort; port++) {
+    if (!(await isPortInUse(port))) return port;
+  }
+
+  throw new Error(`No available port found in range ${startPort}-${endPort}`);
 }

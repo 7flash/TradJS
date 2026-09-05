@@ -7,8 +7,6 @@
  * @module tradjs/web
  */
 
-console.log("🦊 [tradjs] Ready");
-
 // Re-export all server functionality
 export {
   // Types

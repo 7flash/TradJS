@@ -1,97 +1,101 @@
-/**
- * melina/server — Router Unit Tests
- *
- * Tests file-based route discovery and route matching.
- * Uses the showcase app as a real fixture.
- *
- * Run: bun test tests/router.test.ts
- */
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  discoverRoutes,
+  filePathToPattern,
+  matchRoute,
+  patternToRegex,
+  type Route,
+} from "../src/server/router";
 
-import { describe, test, expect } from "bun:test";
-import { discoverRoutes, matchRoute } from "../src/server/router";
-import path from "path";
+const tempDirs: string[] = [];
 
-const showcaseDir = path.join(
-  import.meta.dir,
-  "..",
-  "examples",
-  "showcase",
-  "app",
-);
-
-describe("Route Discovery", () => {
-  let routes: Awaited<ReturnType<typeof discoverRoutes>>;
-
-  test("discovers routes from showcase app", async () => {
-    routes = await discoverRoutes(showcaseDir);
-    expect(routes.length).toBeGreaterThan(0);
-  });
-
-  test("finds home page route", async () => {
-    routes = await discoverRoutes(showcaseDir);
-    const home = routes.find((r) => r.pattern === "/");
-    expect(home).toBeDefined();
-    expect(home!.type).toBe("page");
-  });
-
-  test("finds API routes", async () => {
-    routes = await discoverRoutes(showcaseDir);
-    const apiRoutes = routes.filter((r) => r.type === "api");
-    expect(apiRoutes.length).toBeGreaterThan(0);
-
-    const benchmarkApi = apiRoutes.find((r) =>
-      r.pattern.includes("benchmark-ssg"),
-    );
-    expect(benchmarkApi).toBeDefined();
-  });
-
-  test("finds nested page routes", async () => {
-    routes = await discoverRoutes(showcaseDir);
-    const patterns = routes.map((r) => r.pattern);
-
-    expect(patterns).toContain("/counter");
-    expect(patterns).toContain("/features/ssg");
-  });
-
-  test("associates layouts with routes", async () => {
-    routes = await discoverRoutes(showcaseDir);
-    const home = routes.find((r) => r.pattern === "/");
-    expect(home).toBeDefined();
-    expect(home!.layouts.length).toBeGreaterThan(0);
-  });
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
-describe("Route Matching", () => {
-  let routes: Awaited<ReturnType<typeof discoverRoutes>>;
+function tempApp(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "tradjs-router-"));
+  tempDirs.push(dir);
+  return dir;
+}
 
-  test("matches exact routes", async () => {
-    routes = await discoverRoutes(showcaseDir);
-
-    const match = matchRoute("/", routes);
-    expect(match).not.toBeNull();
-    expect(match!.route.pattern).toBe("/");
+describe("router contracts", () => {
+  test("treats regex metacharacters in static routes literally", () => {
+    const regex = patternToRegex("/releases/v1.0+stable");
+    expect(regex.test("/releases/v1.0+stable")).toBe(true);
+    expect(regex.test("/releases/v1x00stable")).toBe(false);
   });
 
-  test("matches nested routes", async () => {
-    routes = await discoverRoutes(showcaseDir);
+  test("decodes route parameters after matching", () => {
+    const route: Route = {
+      filePath: "/app/items/[id]/page.tsx",
+      pattern: "/items/:id",
+      pathname: "/items/:id",
+      paramNames: ["id"],
+      regex: patternToRegex("/items/:id"),
+      layouts: [],
+      middlewares: [],
+      type: "page",
+    };
 
-    const match = matchRoute("/counter", routes);
-    expect(match).not.toBeNull();
-    expect(match!.route.pattern).toBe("/counter");
+    expect(matchRoute("/items/hello%20world", [route])?.params).toEqual({
+      id: "hello world",
+    });
   });
 
-  test("returns null for non-existent routes", async () => {
-    routes = await discoverRoutes(showcaseDir);
-
-    const match = matchRoute("/this-does-not-exist", routes);
-    expect(match).toBeNull();
+  test("rejects duplicate parameter names", () => {
+    expect(() => filePathToPattern("/app/[id]/[id]/page.tsx", "/app")).toThrow(
+      'Duplicate route parameter "id"',
+    );
   });
 
-  test("matches API routes", async () => {
-    routes = await discoverRoutes(showcaseDir);
+  test("fails for a missing app root instead of silently returning no routes", () => {
+    const root = path.join(tempApp(), "missing");
+    expect(() => discoverRoutes(root, { quiet: true })).toThrow(
+      "Could not scan app directory",
+    );
+  });
 
-    const match = matchRoute("/api/benchmark-ssg", routes);
-    expect(match).not.toBeNull();
-    expect(match!.route.type).toBe("api");
+  test("rejects dynamic routes with equivalent matchers", () => {
+    const root = tempApp();
+    for (const param of ["[id]", "[slug]"]) {
+      const dir = path.join(root, param);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "page.ts"), "export default () => null;");
+    }
+
+    expect(() => discoverRoutes(root, { quiet: true })).toThrow(
+      "Route conflict",
+    );
+  });
+
+  test("orders overlapping dynamic routes by segment specificity", () => {
+    const root = tempApp();
+    for (const relative of ["[section]/new", "users/[id]"]) {
+      const dir = path.join(root, relative);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "page.ts"), "export default () => null;");
+    }
+
+    const routes = discoverRoutes(root, { quiet: true });
+    expect(matchRoute("/users/new", routes)?.route.pattern).toBe("/users/:id");
+  });
+
+  test("rejects route groups that collapse to the same URL", () => {
+    const root = tempApp();
+    for (const group of ["(a)", "(b)"]) {
+      const dir = path.join(root, group);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "page.ts"), "export default () => null;");
+    }
+
+    expect(() => discoverRoutes(root, { quiet: true })).toThrow(
+      'Route conflict for "/"',
+    );
   });
 });

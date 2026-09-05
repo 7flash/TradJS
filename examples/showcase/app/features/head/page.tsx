@@ -81,20 +81,23 @@ export default function AboutPage() {
       </div>
 
       <div className="demo-card" style={{ marginBottom: "24px" }}>
-        <h3 className="demo-card-title">⚙️ How it works (SSR side-channel)</h3>
+        <h3 className="demo-card-title">
+          ⚙️ How it works (request-scoped SSR)
+        </h3>
         <p className="demo-card-description">
-          The <code>{"<Head>"}</code> component uses a{" "}
-          <strong>side-channel pattern</strong> during Server-Side Rendering:
+          The <code>{"<Head>"}</code> component writes into a request-scoped
+          collector while Server-Side Rendering runs. Concurrent requests keep
+          separate metadata, including across async component awaits.
         </p>
         <div className="code-block">
-          {`1. resetHead()        — Clear any previous head elements
-2. renderToString()   — SSR runs, calls page components
-3. <Head> detected    — Its children are collected (not rendered to body)
-4. getHeadElements()  — Collected elements are retrieved
-5. HTML injection     — Elements are placed into the <head> tag
+          {`1. collectHeadAsync()   — Create an isolated collector for this render
+2. renderToStringAsync() — Render the component tree, including async components
+3. <Head> detected       — Its children are collected, not emitted into <body>
+4. render completes      — HTML and collected head elements are returned together
+5. HTML injection        — Collected elements are inserted into the document <head>
 
-Result: <Head><title>X</title></Head> 
-  → appears in <head>, NOT in <body>`}
+Result: <Head><title>X</title></Head>
+  → appears in <head>, NOT in <body>, without shared global request state`}
         </div>
       </div>
 
