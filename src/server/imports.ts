@@ -6,7 +6,7 @@
  */
 
 import path from "path";
-import { importMapMeasure, measureRequired } from "./measure";
+import { importMapMeasure } from "./measure";
 import type { ImportConfig, ImportMap } from "./types";
 
 const isDev = process.env.NODE_ENV !== "production";
@@ -101,6 +101,72 @@ async function loadJsonFile(filePath: string): Promise<unknown> {
   ).default;
 }
 
+function buildImportMap(
+  importsConfig: Record<string, ImportConfig>,
+): ImportMap {
+  const importMap: ImportMap = { imports: {} };
+  const versionMap: Record<string, string> = {};
+
+  // First pass: collect versions for base packages.
+  for (const imp of Object.values(importsConfig)) {
+    const { baseName } = splitPackageSpecifier(imp.baseName || imp.name);
+    versionMap[baseName] ??= imp.version ?? "latest";
+  }
+
+  // Second pass: build esm.sh URLs.
+  for (const [key, imp] of Object.entries(importsConfig)) {
+    const { baseName } = splitPackageSpecifier(imp.baseName || imp.name);
+    const version = versionMap[baseName] || "latest";
+    const useStarPrefix = imp.markAllExternal === true;
+    const starPrefix = useStarPrefix ? "*" : "";
+
+    const url = imp.subpath
+      ? `https://esm.sh/${starPrefix}${baseName}@${version}/${imp.subpath}`
+      : `https://esm.sh/${starPrefix}${imp.name}@${version}`;
+
+    const queryParts: string[] = [];
+
+    if (imp.external && !useStarPrefix) {
+      let externals: string[] = [];
+      if (Array.isArray(imp.external)) {
+        externals = imp.external;
+      } else {
+        externals = Object.keys(importsConfig)
+          .filter((otherKey) => otherKey !== key)
+          .map((otherKey) => splitPackageSpecifier(otherKey).baseName)
+          .filter((value, index, self) => self.indexOf(value) === index);
+      }
+      if (externals.length > 0) {
+        queryParts.push(`external=${externals.join(",")}`);
+      }
+    }
+
+    if (imp.deps?.length) {
+      const depsList = imp.deps
+        .map((depName) => {
+          const depBaseName = splitPackageSpecifier(depName).baseName;
+          const depVersion = versionMap[depBaseName] || "latest";
+          return `${depName}@${depVersion}`;
+        })
+        .join(",");
+      queryParts.push(`deps=${depsList}`);
+    }
+
+    if (isDev) queryParts.push("dev");
+
+    const query = queryParts.length ? `?${queryParts.join("&")}` : "";
+    importMap.imports[key] = url + query;
+
+    if (!key.endsWith("/")) {
+      // Import-map prefix targets must themselves be path prefixes. Query
+      // parameters belong on the exact-package mapping, not after the slash.
+      importMap.imports[`${key}/`] = `${url}/`;
+    }
+  }
+
+  return importMap;
+}
+
 export async function imports(
   subpaths: string[] = [],
   pkgJson?: unknown,
@@ -166,77 +232,16 @@ export async function imports(
     };
   }
 
-  return measureRequired(
-    importMapMeasure,
+  return importMapMeasure.measure(
     {
-      label: "Generate import map",
-      packages: Object.keys(importsConfig).length,
-      result: (value: ImportMap) => ({
+      start: () => "Generate import map",
+      end: (value: ImportMap) => ({
         imports: Object.keys(value.imports).length,
       }),
+      catch: (error: unknown) => {
+        throw error;
+      },
     },
-    async () => {
-      const importMap: ImportMap = { imports: {} };
-      const versionMap: Record<string, string> = {};
-
-      // First pass: collect versions for base packages.
-      for (const imp of Object.values(importsConfig)) {
-        const { baseName } = splitPackageSpecifier(imp.baseName || imp.name);
-        versionMap[baseName] ??= imp.version ?? "latest";
-      }
-
-      // Second pass: build esm.sh URLs.
-      for (const [key, imp] of Object.entries(importsConfig)) {
-        const { baseName } = splitPackageSpecifier(imp.baseName || imp.name);
-        const version = versionMap[baseName] || "latest";
-        const useStarPrefix = imp.markAllExternal === true;
-        const starPrefix = useStarPrefix ? "*" : "";
-
-        const url = imp.subpath
-          ? `https://esm.sh/${starPrefix}${baseName}@${version}/${imp.subpath}`
-          : `https://esm.sh/${starPrefix}${imp.name}@${version}`;
-
-        const queryParts: string[] = [];
-
-        if (imp.external && !useStarPrefix) {
-          let externals: string[] = [];
-          if (Array.isArray(imp.external)) {
-            externals = imp.external;
-          } else {
-            externals = Object.keys(importsConfig)
-              .filter((otherKey) => otherKey !== key)
-              .map((otherKey) => splitPackageSpecifier(otherKey).baseName)
-              .filter((value, index, self) => self.indexOf(value) === index);
-          }
-          if (externals.length > 0) {
-            queryParts.push(`external=${externals.join(",")}`);
-          }
-        }
-
-        if (imp.deps?.length) {
-          const depsList = imp.deps
-            .map((depName) => {
-              const depBaseName = splitPackageSpecifier(depName).baseName;
-              const depVersion = versionMap[depBaseName] || "latest";
-              return `${depName}@${depVersion}`;
-            })
-            .join(",");
-          queryParts.push(`deps=${depsList}`);
-        }
-
-        if (isDev) queryParts.push("dev");
-
-        const query = queryParts.length ? `?${queryParts.join("&")}` : "";
-        importMap.imports[key] = url + query;
-
-        if (!key.endsWith("/")) {
-          // Import-map prefix targets must themselves be path prefixes. Query
-          // parameters belong on the exact-package mapping, not after the slash.
-          importMap.imports[`${key}/`] = `${url}/`;
-        }
-      }
-
-      return importMap;
-    },
+    async () => buildImportMap(importsConfig),
   );
 }

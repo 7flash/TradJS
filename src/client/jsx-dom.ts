@@ -1,114 +1,64 @@
-/**
- * Melina.js JSX-to-DOM Runtime
- *
- * JSX in client.tsx files creates REAL DOM elements, not virtual DOM.
- *
- * Usage:
- *   const el = <div class="toast"><span>Hello</span></div>;
- *   document.body.appendChild(el); // Works directly!
- */
-
-import {
-  assignElementStyle,
-  createDomElement,
-  domAttributeName,
-  setElementClass,
-} from "./dom";
-
+import { createDomElement } from "./dom";
+import { eventDescriptor, rawHtml, setDomProp, setRef } from "./props";
+import { isEventProp } from "../shared/attributes";
 type Child = Node | string | number | boolean | null | undefined | Child[];
-
-export function jsx(
-  tag: string | ((props: any) => Node),
+type Tag = string | ((props: any) => Node);
+export function createElement(
+  tag: Tag,
   props: Record<string, any> | null,
   ...children: Child[]
 ): Node {
-  // Function component
-  if (typeof tag === "function") {
-    const finalProps = { ...props };
-    // Use varargs children only if props.children is missing (Classic Runtime fallback)
-    if ((!props || props.children === undefined) && children.length > 0) {
-      finalProps.children = children.length === 1 ? children[0] : children;
-    }
-    return tag(finalProps);
-  }
-
+  const finalProps = { ...(props ?? {}) };
+  if (children.length)
+    finalProps.children = children.length === 1 ? children[0] : children;
+  if (typeof tag === "function") return tag(finalProps);
   const el = createDomElement(tag);
-
-  // Set attributes/properties
-  if (props) {
-    for (const [key, value] of Object.entries(props)) {
-      if (key === "children") continue;
-      if (value === null || value === undefined || value === false) continue;
-
-      if (key === "style" && typeof value === "object") {
-        assignElementStyle(el, value);
-      } else if (key === "className" || key === "class") {
-        setElementClass(el, value);
-      } else if (key === "htmlFor") {
-        el.setAttribute(domAttributeName(el, key), String(value));
-      } else if (key === "dangerouslySetInnerHTML") {
-        el.innerHTML = value.__html || "";
-      } else if (key.startsWith("on") && typeof value === "function") {
-        // Event handlers: onClick -> click
-        const event = key.slice(2).toLowerCase();
-        el.addEventListener(event, value);
-      } else if (key === "ref" && typeof value === "function") {
-        value(el);
-      } else if (value === true) {
-        el.setAttribute(domAttributeName(el, key), "");
-      } else {
-        el.setAttribute(domAttributeName(el, key), String(value));
-      }
-    }
-
-    // Handle children passed as prop (Automatic Runtime)
-    if (props.children !== undefined) {
-      appendChildren(
-        el,
-        Array.isArray(props.children) ? props.children : [props.children],
-      );
-    }
-  }
-
-  // Append direct children (Classic Runtime fallback)
-  if ((!props || props.children === undefined) && children.length > 0) {
-    appendChildren(el, children);
-  }
-
-  return el;
-}
-
-function appendChildren(parent: Element, children: Child[]) {
-  for (const child of children) {
+  for (const [key, value] of Object.entries(finalProps)) {
     if (
-      child === null ||
-      child === undefined ||
-      child === false ||
-      child === true
+      ["key", "children", "ref", "dangerouslySetInnerHTML", "value"].includes(
+        key,
+      )
     )
       continue;
-    if (Array.isArray(child)) {
-      appendChildren(parent, child);
-    } else if (child instanceof Node) {
-      parent.appendChild(child);
-    } else {
-      parent.appendChild(document.createTextNode(String(child)));
-    }
+    if (isEventProp(key)) {
+      if (typeof value === "function") {
+        const { type, capture } = eventDescriptor(key);
+        el.addEventListener(type, value, capture);
+      }
+    } else setDomProp(el, key, value);
   }
+  const raw = rawHtml(finalProps);
+  if (raw !== null) el.innerHTML = raw;
+  else appendChildren(el, [finalProps.children]);
+  if (Object.hasOwn(finalProps, "value"))
+    setDomProp(el, "value", finalProps.value);
+  setRef(finalProps.ref, el);
+  return el;
 }
-
-// JSX runtime entry points (used by Bun/esbuild JSX transform)
+export function jsx(
+  tag: Tag,
+  props: Record<string, any> | null,
+  _key?: string | number,
+): Node {
+  return createElement(tag, props);
+}
 export const jsxs = jsx;
 export const jsxDEV = jsx;
-export const Fragment = ({ children }: { children: Child | Child[] }) => {
-  const frag = document.createDocumentFragment();
-  if (children !== undefined) {
-    appendChildren(
-      frag as any,
-      Array.isArray(children) ? children : [children],
-    );
+function appendChildren(parent: Node, children: Child[]): void {
+  for (const child of children) {
+    if (child == null || typeof child === "boolean") continue;
+    if (Array.isArray(child)) appendChildren(parent, child);
+    else if (typeof child === "object" && typeof child.nodeType === "number")
+      parent.appendChild(child);
+    else
+      parent.appendChild(
+        (parent.ownerDocument ?? document).createTextNode(String(child)),
+      );
   }
-  return frag;
-};
-
-export default { jsx, jsxs, jsxDEV, Fragment };
+}
+export function Fragment({ children }: { children?: Child }): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  appendChildren(fragment, [children]);
+  return fragment;
+}
+export default { jsx, jsxs, jsxDEV, Fragment, createElement };

@@ -1,16 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "fs";
 import os from "os";
 import path from "path";
 import { discoverRoutes } from "../src/server/router";
-
 const tempDirs: string[] = [];
-
 afterEach(() => {
   for (const dir of tempDirs.splice(0))
     rmSync(dir, { recursive: true, force: true });
 });
-
 describe("route convention extensions", () => {
   test("discovers JS/JSX/TS/TSX convention files consistently", () => {
     const appDir = mkdtempSync(path.join(os.tmpdir(), "tradjs-router-"));
@@ -45,11 +42,9 @@ describe("route convention extensions", () => {
       path.join(appDir, "api", "route.jsx"),
       "export const GET = () => new Response('ok');\n",
     );
-
     const routes = discoverRoutes(appDir, { quiet: true });
     const page = routes.find((route) => route.pattern === "/nested")!;
     const api = routes.find((route) => route.pattern === "/api")!;
-
     expect(page.layouts.map((file) => path.basename(file))).toEqual([
       "layout.js",
       "layout.ts",
@@ -62,4 +57,31 @@ describe("route convention extensions", () => {
     expect(api.type).toBe("api");
     expect(path.basename(api.filePath)).toBe("route.jsx");
   });
+});
+test("discovery ignores symlink cycles and symlinked convention files", () => {
+  const appDir = mkdtempSync(path.join(os.tmpdir(), "tradjs-symlinks-"));
+  tempDirs.push(appDir);
+  writeFileSync(
+    path.join(appDir, "implementation.ts"),
+    "export default () => null;",
+  );
+  symlinkSync(appDir, path.join(appDir, "cycle"), "dir");
+  symlinkSync(
+    path.join(appDir, "implementation.ts"),
+    path.join(appDir, "page.ts"),
+  );
+  symlinkSync(
+    path.join(appDir, "implementation.ts"),
+    path.join(appDir, "middleware.ts"),
+  );
+  mkdirSync(path.join(appDir, "real"));
+  writeFileSync(
+    path.join(appDir, "real", "page.ts"),
+    "export default () => null;",
+  );
+  const routes = discoverRoutes(path.relative(process.cwd(), appDir), {
+    quiet: true,
+  });
+  expect(routes.map((route) => route.pattern)).toEqual(["/real"]);
+  expect(routes[0].middlewares).toEqual([]);
 });

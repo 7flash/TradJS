@@ -1,28 +1,31 @@
 {
-    "compilerOptions": {
-        "jsx": "react-jsx",
-        "jsxImportSource": "tradjs/client",
-        "baseUrl": "../..",
-        "paths": {
-            "tradjs": ["./src/web.ts"],
-            "tradjs/*": ["./src/*"],
-            "fastjs": ["./src/web.ts"],
-            "fastjs/*": ["./src/*"],
-            "lastjs": ["./src/web.ts"],
-            "lastjs/*": ["./src/*"],
-            "melina": ["./src/web.ts"],
-            "melina/*": ["./src/*"]
-        },
-        "target": "ESNext",
-        "module": "ESNext",
-        "moduleResolution": "bundler",
-        "allowImportingTsExtensions": true,
-        "strict": true,
-        "noEmit": true,
-        "skipLibCheck": true
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "tradjs/client",
+    "baseUrl": "../..",
+    "paths": {
+      "tradjs": [
+        "./src/web.ts"
+      ],
+      "tradjs/*": [
+        "./src/*"
+      ]
     },
-    "include": [
-        "app/**/*",
-        "server.ts"
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "lib": [
+      "ESNext",
+      "DOM",
+      "DOM.Iterable"
     ]
+  },
+  "include": [
+    "app/**/*",
+    "server.ts"
+  ]
 }

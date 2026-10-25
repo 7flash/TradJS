@@ -1,21 +1,3 @@
-/**
- * tradjs/client — Client-Side Renderer
- *
- * Pluggable VDOM reconciler with replaceable diffing strategies:
- *
- * 1. KEYED DIFF — O(n log n) via key→fiber map + LIS for list mutations.
- * 2. SEQUENTIAL DIFF — O(n) index-based for static/non-keyed children.
- * 3. PROPERTY PATCH — In-place attribute updates, preserves event listeners.
- *
- * The reconciler is configurable via `setReconciler()`. By default, `auto`
- * mode inspects children for keys and selects the best strategy per diff.
- *
- * Strategies are defined in `src/client/reconcilers/` and implement the
- * Reconciler interface. See reconcilers/types.ts for the contract.
- *
- * Zero dependencies. ~2KB gzipped.
- */
-
 import {
   Fragment,
   type VNode,
@@ -32,69 +14,89 @@ import { sequentialReconciler } from "./reconcilers/sequential";
 import { keyedReconciler } from "./reconcilers/keyed";
 import { replaceReconciler } from "./reconcilers/replace";
 import {
+  attachBoundary,
+  detachBoundary,
+  isBoundary,
+  type Boundary,
+} from "./boundary";
+import {
   assignElementStyle,
   createDomElement,
   domAttributeName,
   setElementClass,
 } from "./dom";
 
-// ─── Fiber: Internal representation of a mounted VNode ─────────────────────────
-
 export interface Fiber {
-  node: Node | null; // The real DOM node (or null for fragments/components)
-  vnode: VNode | Child; // The VNode that produced this fiber
+  node: Node | null;
+  vnode: VNode | Child;
   parent: Fiber | null;
   children: Fiber[];
-  listeners: Map<string, EventListener>; // Track event listeners for cleanup
+  listeners: Map<string, EventListener>;
   key: string | number | null;
 }
 
-// ─── Public API ────────────────────────────────────────────────────────────────
-
 const rootFibers = new WeakMap<HTMLElement, Fiber>();
-
-// Per-render reconciler override — set during render(), used by diffChildren()
+const vnodeOwners = new WeakMap<VNode, Fiber>();
+let activeComponentFiber: Fiber | null = null;
+let renderInProgress = false;
 let _renderScopedReconciler: ReconcilerName | Reconciler | null = null;
 
 export interface RenderOptions {
-  /** Override reconciler strategy for this render call only. */
   reconciler?: ReconcilerName | Reconciler;
 }
 
-/**
- * Render a VNode tree into a container.
- * First call: mounts the tree.
- * Subsequent calls: diffs against the previous tree and patches the DOM.
- *
- * @param options.reconciler  Override reconciler for this render only.
- */
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as any).then === "function"
+  );
+}
+
+function assertSyncClientComponentResult(result: unknown): void {
+  if (!isPromiseLike(result)) return;
+  throw new Error(
+    "[tradjs] Client render() does not support async components. Await async work in a controller/action, update state, then repaint the affected render boundary.",
+  );
+}
+
+function runRenderTransaction<T>(work: () => T): T {
+  if (renderInProgress) {
+    throw new Error("[tradjs] Cannot render during another render.");
+  }
+  renderInProgress = true;
+  try {
+    return work();
+  } finally {
+    renderInProgress = false;
+  }
+}
+
 export function render(
   vnode: VNode | null,
   container: HTMLElement,
   options?: RenderOptions,
 ): Fiber {
-  let rootFiber = rootFibers.get(container);
+  return runRenderTransaction(() => {
+    let rootFiber = rootFibers.get(container);
+    if (!rootFiber) {
+      while (container.firstChild) container.removeChild(container.firstChild);
+      rootFiber = createFiber(null, null);
+      rootFiber.node = container;
+      rootFibers.set(container, rootFiber);
+    }
 
-  if (!rootFiber) {
-    while (container.firstChild) container.removeChild(container.firstChild);
-    rootFiber = createFiber(null, null);
-    rootFiber.node = container;
-    rootFibers.set(container, rootFiber);
-  }
-
-  const prev = _renderScopedReconciler;
-  _renderScopedReconciler = options?.reconciler ?? null;
-  try {
-    const newChildren = vnode ? [vnode] : [];
-    diffChildren(rootFiber, container, rootFiber.children, newChildren);
-  } finally {
-    _renderScopedReconciler = prev;
-  }
-
-  return rootFiber;
+    const prev = _renderScopedReconciler;
+    _renderScopedReconciler = options?.reconciler ?? null;
+    try {
+      const newChildren = vnode ? [vnode] : [];
+      diffChildren(rootFiber, container, rootFiber.children, newChildren);
+    } finally {
+      _renderScopedReconciler = prev;
+    }
+    return rootFiber;
+  });
 }
-
-// ─── Fiber Factory ─────────────────────────────────────────────────────────────
 
 function createFiber(vnode: VNode | Child, parent: Fiber | null): Fiber {
   return {
@@ -108,10 +110,6 @@ function createFiber(vnode: VNode | Child, parent: Fiber | null): Fiber {
   };
 }
 
-// ─── Collect DOM Nodes ─────────────────────────────────────────────────────────
-// Fragments and components don't have their own DOM node.
-// This collects the actual DOM nodes from a fiber tree.
-
 function collectNodes(fiber: Fiber): Node[] {
   if (
     fiber.node &&
@@ -122,12 +120,10 @@ function collectNodes(fiber: Fiber): Node[] {
       fiber.vnode.type === Fragment
     )
   ) {
-    // Regular element or text — return its DOM node
     if (fiber.node instanceof Element || fiber.node instanceof Text) {
       return [fiber.node];
     }
   }
-  // Fragment or component without own node — collect from children
   const nodes: Node[] = [];
   for (const child of fiber.children) {
     nodes.push(...collectNodes(child));
@@ -135,38 +131,78 @@ function collectNodes(fiber: Fiber): Node[] {
   return nodes;
 }
 
-// ─── Pluggable Reconciler ──────────────────────────────────────────────────────
-
-/** The global reconciler. Defaults to 'auto' which selects keyed vs sequential per diff. */
 let activeReconciler: ReconcilerName | Reconciler = "auto";
 
-/** Named strategy lookup — avoids if/else chains. */
 const RECONCILERS: Record<string, Reconciler> = {
   keyed: keyedReconciler,
   sequential: sequentialReconciler,
   replace: replaceReconciler,
 };
 
-/**
- * Set the global reconciliation strategy.
- * Can be overridden per-render via `render(vnode, container, { reconciler }))`.
- */
 export function setReconciler(strategy: ReconcilerName | Reconciler): void {
   activeReconciler = strategy;
 }
 
-/** Get the current global reconciler name/function. */
 export function getReconciler(): ReconcilerName | Reconciler {
   return activeReconciler;
 }
 
-/** Shared context passed to reconciler strategies. */
 const reconcilerCtx: ReconcilerContext = {
   mountVNode,
   patchFiber,
   removeFiber,
   collectNodes,
 };
+
+function findPlacementAnchor(fiber: Fiber, parentNode: Node): Node | null {
+  let current: Fiber | null = fiber;
+
+  while (current?.parent) {
+    const parent: Fiber = current.parent;
+    const index = parent.children.indexOf(current);
+
+    if (index >= 0) {
+      for (let i = index + 1; i < parent.children.length; i++) {
+        const siblingNodes = collectNodes(parent.children[i]);
+        for (const node of siblingNodes) {
+          if (node.parentNode === parentNode) return node;
+        }
+      }
+    }
+
+    if (parent.node === parentNode) return null;
+    current = parent;
+  }
+
+  return null;
+}
+
+function placeLogicalFiber(
+  fiber: Fiber,
+  parentNode: Node,
+  anchor: Node | null,
+): void {
+  const nodes = collectNodes(fiber);
+  if (nodes.length === 0) return;
+
+  const safeAnchor = anchor?.parentNode === parentNode ? anchor : null;
+  const allParented = nodes.every((node) => node.parentNode === parentNode);
+  const contiguous =
+    allParented &&
+    nodes.every(
+      (node, index) =>
+        index === nodes.length - 1 || node.nextSibling === nodes[index + 1],
+    );
+  const correctlyPlaced =
+    contiguous && nodes[nodes.length - 1].nextSibling === safeAnchor;
+
+  if (correctlyPlaced) return;
+
+  for (const node of nodes) {
+    if (safeAnchor) parentNode.insertBefore(node, safeAnchor);
+    else parentNode.appendChild(node);
+  }
+}
 
 function diffChildren(
   parentFiber: Fiber,
@@ -175,27 +211,31 @@ function diffChildren(
   newVNodes: (VNode | Child)[],
 ): void {
   const flatNew = flattenChildren(newVNodes);
-
-  // Per-render override OR global strategy
   const effective = _renderScopedReconciler ?? activeReconciler;
-
-  // Custom reconciler function — delegate entirely
-  if (typeof effective === "function") {
-    effective(parentFiber, parentNode, oldFibers, flatNew, reconcilerCtx);
-    return;
-  }
-
-  // Detect keys in this set of children
   const hasKeys =
     flatNew.some(
       (v) => v && typeof v === "object" && "key" in v && v.key != null,
     ) || oldFibers.some((f) => f.key != null);
+  const logicalParent = parentFiber.node === null;
+  const oldLogicalNodes = logicalParent ? collectNodes(parentFiber) : [];
+  const needsPlacement =
+    logicalParent &&
+    (oldLogicalNodes.length === 0 ||
+      typeof effective === "function" ||
+      effective === "replace" ||
+      hasKeys);
+  const placementAnchor = needsPlacement
+    ? findPlacementAnchor(parentFiber, parentNode)
+    : null;
 
-  // Named strategy resolution — key-aware at every level:
-  //   'keyed'     → use keyed ONLY when keys exist, else sequential
-  //   'sequential'→ always sequential (ignores keys entirely)
-  //   'auto'      → keyed when keys present, sequential otherwise
-  //   'replace'   → always replace
+  if (typeof effective === "function") {
+    effective(parentFiber, parentNode, oldFibers, flatNew, reconcilerCtx);
+    if (needsPlacement) {
+      placeLogicalFiber(parentFiber, parentNode, placementAnchor);
+    }
+    return;
+  }
+
   if (effective === "replace") {
     RECONCILERS.replace(
       parentFiber,
@@ -204,9 +244,7 @@ function diffChildren(
       flatNew,
       reconcilerCtx,
     );
-    return;
-  }
-  if (effective === "sequential") {
+  } else if (effective === "sequential") {
     sequentialReconciler(
       parentFiber,
       parentNode,
@@ -214,10 +252,7 @@ function diffChildren(
       flatNew,
       reconcilerCtx,
     );
-    return;
-  }
-  // 'keyed' and 'auto' both respect key presence
-  if (hasKeys) {
+  } else if (hasKeys) {
     keyedReconciler(parentFiber, parentNode, oldFibers, flatNew, reconcilerCtx);
   } else {
     sequentialReconciler(
@@ -228,9 +263,11 @@ function diffChildren(
       reconcilerCtx,
     );
   }
-}
 
-// ─── Strategy 3: Property Patching ─────────────────────────────────────────────
+  if (needsPlacement) {
+    placeLogicalFiber(parentFiber, parentNode, placementAnchor);
+  }
+}
 
 function patchProps(
   el: Element,
@@ -238,13 +275,11 @@ function patchProps(
   newProps: Props,
   fiber: Fiber,
 ): void {
-  // Remove old props not in new
   const safeOldProps = oldProps || {};
   const safeNewProps = newProps || {};
   for (const key of Object.keys(safeOldProps)) {
-    if (key === "children" || key === "key") continue;
+    if (key === "children" || key === "key" || key === "ref") continue;
     if (key in safeNewProps) continue;
-
     if (key.startsWith("on") && typeof safeOldProps[key] === "function") {
       const event = key.slice(2).toLowerCase();
       const oldListener = fiber.listeners.get(event);
@@ -261,11 +296,9 @@ function patchProps(
     }
   }
 
-  // Set new/changed props
   for (const [key, value] of Object.entries(safeNewProps)) {
-    if (key === "children" || key === "key") continue;
+    if (key === "children" || key === "key" || key === "ref") continue;
     if (safeOldProps[key] === value) continue;
-
     if (key === "className" || key === "class") {
       setElementClass(el, value);
     } else if (key === "style" && typeof value === "object") {
@@ -276,12 +309,6 @@ function patchProps(
       if (oldListener) el.removeEventListener(event, oldListener);
       el.addEventListener(event, value);
       fiber.listeners.set(event, value);
-    } else if (
-      key === "ref" &&
-      typeof value === "object" &&
-      "current" in value
-    ) {
-      value.current = el;
     } else if (key === "dangerouslySetInnerHTML") {
       el.innerHTML = value.__html;
     } else if (typeof value === "boolean") {
@@ -295,13 +322,6 @@ function patchProps(
   }
 }
 
-// ─── Shallow Props Comparison ───────────────────────────────────────────────────
-
-/**
- * Compare two props objects for shallow equality.
- * Ignores `children` and `key` — only compares actual props that affect rendering.
- * Used to bail out of component re-execution when props haven't changed.
- */
 function shallowPropsEqual(
   a: Record<string, any>,
   b: Record<string, any>,
@@ -309,7 +329,6 @@ function shallowPropsEqual(
   if (a === b) return true;
   const aKeys = Object.keys(a);
   const bKeys = Object.keys(b);
-  // Quick-check: count non-children/key props
   let aCount = 0,
     bCount = 0;
   for (let i = 0; i < aKeys.length; i++) {
@@ -328,8 +347,6 @@ function shallowPropsEqual(
   return aCount === bCount;
 }
 
-// ─── Patch: Diff one fiber against a new VNode ─────────────────────────────────
-
 function patchFiber(
   oldFiber: Fiber,
   newVNode: VNode | Child,
@@ -346,7 +363,6 @@ function patchFiber(
     return null;
   }
 
-  // Text node
   if (typeof newVNode === "string" || typeof newVNode === "number") {
     if (oldFiber.node instanceof Text) {
       const text = String(newVNode);
@@ -356,7 +372,6 @@ function patchFiber(
       oldFiber.vnode = newVNode;
       return oldFiber;
     }
-    // Type changed — replace
     const anchor = getNextSibling(oldFiber, parentNode);
     removeFiber(oldFiber, parentNode);
     const newFiber = mountVNode(newVNode, parentFiber);
@@ -369,7 +384,6 @@ function patchFiber(
 
   const oldVNode = oldFiber.vnode;
   if (!oldVNode || typeof oldVNode !== "object" || !("type" in oldVNode)) {
-    // Old was text/null, new is VNode — replace
     const anchor = getNextSibling(oldFiber, parentNode);
     removeFiber(oldFiber, parentNode);
     const newFiber = mountVNode(newVNode, parentFiber);
@@ -383,9 +397,7 @@ function patchFiber(
     return newFiber;
   }
 
-  // Same type? Patch in-place!
   if (oldVNode.type === newVNode.type) {
-    // Fragment
     if (newVNode.type === Fragment) {
       const fragChildren = normalizeChildren(newVNode.props.children);
       diffChildren(oldFiber, parentNode, oldFiber.children, fragChildren);
@@ -393,42 +405,44 @@ function patchFiber(
       return oldFiber;
     }
 
-    // Component — always re-execute by default.
-    // Components may read global/module state, so unchanged props do not prove
-    // unchanged output. Use memo(Component) for explicit opt-in bailout.
     if (typeof newVNode.type === "function") {
       const compare = (newVNode.type as any).__tradjsMemoCompare as
         ((oldProps: any, newProps: any) => boolean) | undefined;
-
       if (compare && compare(oldVNode.props, newVNode.props)) {
         oldFiber.vnode = newVNode;
         return oldFiber;
       }
-
-      const result = (newVNode.type as Component)(newVNode.props);
-      const resultArr = result ? [result] : [];
-      const componentParent = oldFiber.node || parentNode;
-      diffChildren(oldFiber, componentParent, oldFiber.children, resultArr);
+      const result = executeComponent(
+        oldFiber,
+        newVNode.type as Component,
+        newVNode.props,
+      );
+      const resultArr = flattenChildren([result]);
+      diffChildren(oldFiber, parentNode, oldFiber.children, resultArr);
       oldFiber.vnode = newVNode;
-      // Update component fiber's node reference to its first child's node
-      if (oldFiber.children.length > 0 && oldFiber.children[0].node) {
-        oldFiber.node = oldFiber.children[0].node;
-      }
+      oldFiber.node = null;
       return oldFiber;
     }
 
-    // Same DOM element — patch props + diff children (HTML or SVG).
     const el = oldFiber.node;
     if (el instanceof Element) {
+      if (oldVNode.props.ref !== newVNode.props.ref) {
+        releaseRef(oldVNode.props.ref, el, oldFiber);
+      }
       patchProps(el, oldVNode.props, newVNode.props, oldFiber);
       const newChildVNodes = normalizeChildren(newVNode.props.children);
       diffChildren(oldFiber, el, oldFiber.children, newChildVNodes);
       oldFiber.vnode = newVNode;
+      bindRef(
+        newVNode.props.ref,
+        el,
+        oldFiber,
+        vnodeOwners.get(newVNode) ?? null,
+      );
       return oldFiber;
     }
   }
 
-  // Different type — replace
   const anchor = getNextSibling(oldFiber, parentNode);
   removeFiber(oldFiber, parentNode);
   const newFiber = mountVNode(newVNode, parentFiber);
@@ -441,9 +455,6 @@ function patchFiber(
   }
   return newFiber;
 }
-
-// ─── Mount: Create a fiber + DOM node from a VNode ─────────────────────────────
-// `parentNode` is optional — if provided, the created node is appended there.
 
 function mountVNode(
   vnode: VNode | Child,
@@ -459,7 +470,6 @@ function mountVNode(
     return null;
   }
 
-  // Text
   if (typeof vnode === "string" || typeof vnode === "number") {
     const fiber = createFiber(vnode, parentFiber);
     fiber.node = document.createTextNode(String(vnode));
@@ -470,7 +480,6 @@ function mountVNode(
   const { type, props: rawProps } = vnode;
   const props = rawProps || {};
 
-  // Fragment — no own DOM node, mount children directly
   if (type === Fragment) {
     const fiber = createFiber(vnode, parentFiber);
     const children = normalizeChildren(props.children);
@@ -481,56 +490,48 @@ function mountVNode(
     return fiber;
   }
 
-  // Component — execute and mount result
   if (typeof type === "function") {
     const fiber = createFiber(vnode, parentFiber);
-    const result = (type as Component)(props);
-    if (result) {
-      const childFiber = mountVNode(result, fiber, parentNode);
-      if (childFiber) {
-        fiber.children.push(childFiber);
-        fiber.node = childFiber.node;
-      }
+    const result = executeComponent(fiber, type as Component, props);
+    const children = flattenChildren([result]);
+    for (const child of children) {
+      const childFiber = mountVNode(child, fiber, parentNode);
+      if (childFiber) fiber.children.push(childFiber);
     }
     return fiber;
   }
 
-  // DOM element. SVG descendants inherit the namespace from their parent.
   const el = createDomElement(type as string, parentNode);
   const fiber = createFiber(vnode, parentFiber);
   fiber.node = el;
 
   applyProps(el, props, fiber);
 
-  // Mount children into the element
   const children = normalizeChildren(props.children);
   for (const child of children) {
     const childFiber = mountVNode(child, fiber, el);
     if (childFiber) fiber.children.push(childFiber);
   }
-
-  // Append to parent DOM node
   if (parentNode) parentNode.appendChild(el);
+  bindRef(props.ref, el, fiber, vnodeOwners.get(vnode) ?? null);
 
   return fiber;
 }
 
-// ─── Remove: Clean up a fiber and remove its DOM nodes ─────────────────────────
-// Unlike unmountFiber, this does NOT modify parent.children — the caller manages that.
-
 function removeFiber(fiber: Fiber, parentNode: Node): void {
-  // Collect all DOM nodes this fiber owns
   const nodes = collectNodes(fiber);
   for (const node of nodes) {
     if (node.parentNode) node.parentNode.removeChild(node);
   }
-
-  // Clean up listeners recursively
   cleanupFiber(fiber);
 }
 
 function cleanupFiber(fiber: Fiber): void {
   if (fiber.node instanceof Element) {
+    const vnode = fiber.vnode;
+    if (vnode && typeof vnode === "object" && "type" in vnode) {
+      releaseRef(vnode.props?.ref, fiber.node, fiber);
+    }
     for (const [event, listener] of fiber.listeners) {
       fiber.node.removeEventListener(event, listener);
     }
@@ -542,13 +543,10 @@ function cleanupFiber(fiber: Fiber): void {
   fiber.children = [];
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────────────────
-
 function applyProps(el: Element, props: Props, fiber: Fiber): void {
   if (!props) return;
   for (const [key, value] of Object.entries(props)) {
-    if (key === "children" || key === "key") continue;
-
+    if (key === "children" || key === "key" || key === "ref") continue;
     if (key === "className" || key === "class") {
       setElementClass(el, value);
     } else if (key === "style" && typeof value === "object") {
@@ -557,12 +555,6 @@ function applyProps(el: Element, props: Props, fiber: Fiber): void {
       const event = key.slice(2).toLowerCase();
       el.addEventListener(event, value);
       fiber.listeners.set(event, value);
-    } else if (
-      key === "ref" &&
-      typeof value === "object" &&
-      "current" in value
-    ) {
-      value.current = el;
     } else if (key === "dangerouslySetInnerHTML") {
       el.innerHTML = value.__html;
     } else if (typeof value === "boolean") {
@@ -571,6 +563,154 @@ function applyProps(el: Element, props: Props, fiber: Fiber): void {
       el.setAttribute(domAttributeName(el, key), String(value));
     }
   }
+}
+
+function executeComponent(
+  fiber: Fiber,
+  component: Component,
+  props: Props,
+): VNode | null {
+  const previous = activeComponentFiber;
+  activeComponentFiber = fiber;
+  try {
+    const result = component(props);
+    assertSyncClientComponentResult(result);
+    return result;
+  } finally {
+    activeComponentFiber = previous;
+  }
+}
+
+function bindRef(
+  ref: unknown,
+  element: Element,
+  fiber: Fiber,
+  owner: Fiber | null,
+): void {
+  if (isBoundary(ref)) {
+    attachBoundary(ref, element, fiber, (options) =>
+      renderBoundary(ref, fiber, owner, options),
+    );
+    return;
+  }
+  if (ref && typeof ref === "object" && "current" in ref) {
+    (ref as { current: Element | null }).current = element;
+  }
+}
+
+function releaseRef(ref: unknown, element: Element, fiber: Fiber): void {
+  if (isBoundary(ref)) {
+    detachBoundary(ref, element, fiber);
+    return;
+  }
+  if (
+    ref &&
+    typeof ref === "object" &&
+    "current" in ref &&
+    (ref as { current: Element | null }).current === element
+  ) {
+    (ref as { current: Element | null }).current = null;
+  }
+}
+
+function renderBoundary(
+  boundary: Boundary<Element>,
+  hostFiber: Fiber,
+  ownerFiber: Fiber | null,
+  options?: RenderOptions,
+): boolean {
+  const host = hostFiber.node;
+  if (!(host instanceof Element) || boundary.current !== host) {
+    return false;
+  }
+  if (!ownerFiber) return false;
+  const ownerVNode = ownerFiber.vnode;
+  if (
+    !ownerVNode ||
+    typeof ownerVNode !== "object" ||
+    !("type" in ownerVNode) ||
+    typeof ownerVNode.type !== "function"
+  ) {
+    return false;
+  }
+
+  return runRenderTransaction(() => {
+    const result = executeComponent(
+      ownerFiber,
+      ownerVNode.type as Component,
+      ownerVNode.props,
+    );
+    const nextHost = findBoundaryHost(result, boundary, ownerFiber);
+    if (!nextHost) return false;
+    const currentHost = hostFiber.vnode;
+    if (
+      !currentHost ||
+      typeof currentHost !== "object" ||
+      !("type" in currentHost) ||
+      currentHost.type !== nextHost.type
+    ) {
+      return false;
+    }
+
+    const previous = _renderScopedReconciler;
+    _renderScopedReconciler = options?.reconciler ?? null;
+    try {
+      diffChildren(
+        hostFiber,
+        host,
+        hostFiber.children,
+        normalizeChildren(nextHost.props.children),
+      );
+    } finally {
+      _renderScopedReconciler = previous;
+    }
+    return true;
+  });
+}
+
+function findBoundaryHost(
+  value: VNode | Child,
+  boundary: Boundary<Element>,
+  owner: Fiber,
+): VNode | null {
+  let match: VNode | null = null;
+
+  const visit = (candidate: VNode | Child | Child[]): void => {
+    if (Array.isArray(candidate)) {
+      for (const child of candidate) visit(child);
+      return;
+    }
+    if (!candidate || typeof candidate !== "object" || !("type" in candidate)) {
+      return;
+    }
+    const vnode = candidate as VNode;
+    if (
+      typeof vnode.type === "string" &&
+      vnode.props?.ref === boundary &&
+      vnodeOwners.get(vnode) === owner
+    ) {
+      if (match && match !== vnode) {
+        throw new Error(
+          "[tradjs] A boundary can appear only once in its owning component.",
+        );
+      }
+      match = vnode;
+    }
+    const children = vnode.props?.children;
+    if (Array.isArray(children)) {
+      visit(children);
+    } else if (children !== undefined) {
+      visit(children);
+    }
+  };
+
+  visit(value);
+  return match;
+}
+
+function rememberVNodeOwner(vnode: VNode): VNode {
+  if (activeComponentFiber) vnodeOwners.set(vnode, activeComponentFiber);
+  return vnode;
 }
 
 function normalizeChildren(
@@ -598,16 +738,14 @@ function flattenChildren(children: (VNode | Child)[]): (VNode | Child)[] {
   return result;
 }
 
-/**
- * Get the next sibling DOM node after a fiber's nodes, for insertion positioning.
- */
 function getNextSibling(fiber: Fiber, parentNode: Node): Node | null {
   const nodes = collectNodes(fiber);
-  if (nodes.length === 0) return null;
-  return nodes[nodes.length - 1].nextSibling;
+  if (nodes.length > 0) {
+    const next = nodes[nodes.length - 1].nextSibling;
+    if (next) return next;
+  }
+  return findPlacementAnchor(fiber, parentNode);
 }
-
-// ─── Explicit Component Memoization ────────────────────────────────────────────
 
 export function memo<P extends Record<string, any>>(
   Component: (props: P) => any,
@@ -627,8 +765,6 @@ export function memo<P extends Record<string, any>>(
   return MemoComponent as typeof Component;
 }
 
-// ─── createElement ─────────────────────────────────────────────────────────────
-
 export function createElement(
   type: string | Component<any> | typeof Fragment,
   props: Props | null,
@@ -640,16 +776,20 @@ export function createElement(
   } else if (children.length > 1) {
     normalizedProps.children = children;
   }
-  return {
+  return rememberVNodeOwner({
     type,
     props: normalizedProps,
     key: normalizedProps.key ?? null,
-  };
+  });
 }
 
-// JSX automatic transform
 export function jsx(type: any, props: any, key?: any): VNode {
-  return { type, props: props || {}, key: key ?? props?.key ?? null };
+  return rememberVNodeOwner({
+    type,
+    props: props || {},
+    key: key ?? props?.key ?? null,
+  });
 }
+
 export const jsxs = jsx;
 export const jsxDEV = jsx;

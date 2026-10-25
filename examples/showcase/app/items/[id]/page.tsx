@@ -1,6 +1,10 @@
 const items: Record<
   string,
-  { title: string; description: string; color: string }
+  {
+    title: string;
+    description: string;
+    color: string;
+  }
 > = {
   alpha: {
     title: "Alpha Component",
@@ -21,11 +25,15 @@ const items: Record<
     color: "#34d399",
   },
 };
-
-export default function DynamicPage({ params }: { params: { id: string } }) {
+export default function DynamicPage({
+  params,
+}: {
+  params: {
+    id: string;
+  };
+}) {
   const id = params?.id || "unknown";
   const item = items[id];
-
   return (
     <div className="page">
       <div className="page-header">
@@ -41,7 +49,7 @@ export default function DynamicPage({ params }: { params: { id: string } }) {
           <span className="badge badge-server">Server SSR</span>
         </div>
         <p className="page-description">
-          Melina.js uses <strong>file-based routing</strong>. The directory
+          TradJS uses <strong>file-based routing</strong>. The directory
           structure inside <code className="code-inline">app/</code> maps
           directly to URL paths. Dynamic segments are defined by wrapping a
           folder name in square brackets.

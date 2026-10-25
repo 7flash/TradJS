@@ -14,7 +14,7 @@ export default function ReconcilerPage() {
           <span className="badge badge-client">Client Mount</span>
         </div>
         <p className="page-description">
-          Melina ships three reconciler strategies plus an{" "}
+          TradJS ships three reconciler strategies plus an{" "}
           <code className="code-inline">auto</code> mode that picks the best one
           per-diff. Each benchmark below is designed so a specific strategy wins
           — and <code className="code-inline">auto</code> stays close to the
@@ -22,7 +22,6 @@ export default function ReconcilerPage() {
         </p>
       </div>
 
-      {/* ── Replace ─────────────────────────────────────────── */}
       <div className="demo-card" id="case-replace">
         <div
           style={{
@@ -60,7 +59,6 @@ Others:  per-element type check + branch + positioning overhead`}</div>
         </div>
       </div>
 
-      {/* ── Sequential ──────────────────────────────────────── */}
       <div className="demo-card" id="case-sequential">
         <div
           style={{
@@ -98,7 +96,6 @@ Replace:    destroys everything + rebuilds                ← total waste`}</div
         </div>
       </div>
 
-      {/* ── Keyed ───────────────────────────────────────────── */}
       <div className="demo-card" id="case-keyed">
         <div
           style={{
@@ -140,7 +137,6 @@ Replace:    destroys all 2000 + creates all 1500         ← catastrophic`}</div
         </div>
       </div>
 
-      {/* ── Auto ────────────────────────────────────────────── */}
       <div className="demo-card" id="case-auto">
         <div
           style={{
@@ -174,7 +170,6 @@ It's the safe default — never the wrong choice.`}</div>
         </div>
       </div>
 
-      {/* ── Live Playground ──────────────────────────────────── */}
       <div className="demo-card">
         <h3 className="demo-card-title">🔬 Live Playground</h3>
         <p className="demo-card-description">
@@ -245,13 +240,11 @@ It's the safe default — never the wrong choice.`}</div>
         ></div>
       </div>
 
-      {/* Hidden workspace */}
       <div
         id="bench-workspace"
         style={{ position: "absolute", left: "-9999px", top: 0 }}
       ></div>
 
-      {/* ── API ──────────────────────────────────────────────── */}
       <div className="demo-card">
         <h3 className="demo-card-title">📝 API</h3>
         <div className="code-block">{`// Per-render override:

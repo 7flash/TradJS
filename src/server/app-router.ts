@@ -1,34 +1,22 @@
-/**
- * App Router — Next.js-style file-based routing
- *
- * Discovers routes from the app directory, renders pages with SSR,
- * builds client mount scripts, and handles API routes.
- */
-
 import path from "path";
 import { existsSync } from "fs";
 import { dedent } from "ts-dedent";
 import { discoverRoutes, matchRoute } from "./router";
-import { clientCompanionPath, styleCompanionPath } from "./conventions";
 import { createElement } from "../client/render";
-import type { Child } from "../client/types";
-import { renderToStringAsync } from "./ssr";
-import { collectHeadAsync, type HeadCollection } from "./head";
+import { renderToString, renderToStringAsync } from "./ssr";
+import { resetHead, getHeadElements } from "./head";
 import { imports } from "./imports";
 import {
   buildScript,
   buildStyle,
   buildClientScript,
   clientScriptsUsingReact,
-  getContentType,
   buildScopedStyle,
   buildAsset,
 } from "./build";
 import { getPrerendered, prerender as ssgPrerender } from "./ssg";
-import { serve as serveHttp, type HttpServeOptions } from "./serve";
-import { errorMessage, errorStack } from "./errors";
-import { escapeHtml, injectHeadElements, serializeInlineScript } from "./html";
-import { measureNote, measureRequired, routeMeasure } from "./measure";
+import { serve as serveHttp } from "./serve";
+import { httpMeasure } from "./measure";
 import type {
   Handler,
   FrontendAppOptions,
@@ -40,6 +28,25 @@ const isDev = process.env.NODE_ENV !== "production";
 const STREAM_SLOT_MARKUP = "<tradjs-stream-slot></tradjs-stream-slot>";
 const VIEW_TRANSITION_STYLE =
   "<style data-tradjs-view-transitions>@view-transition { navigation: auto; } @media (prefers-reduced-motion: reduce) { @view-transition { navigation: none; } }</style>";
+
+function escapeHtml(value: string): string {
+  return value.replace(
+    /[&<>"']/g,
+    (ch) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[ch]!,
+  );
+}
+
+function safeJson(value: unknown): string {
+  const json = JSON.stringify(value) ?? "null";
+  return json.replace(/</g, "\\u003c");
+}
 
 function injectViewTransitions(html: string, enabled: boolean): string {
   if (!enabled || html.includes("data-tradjs-view-transitions")) return html;
@@ -58,332 +65,293 @@ function injectViewTransitions(html: string, enabled: boolean): string {
 function applyRouteBodyAttributes(html: string, routePattern: string): string {
   if (!html.includes("<body")) return html;
   if (/data-page=/.test(html)) {
-    return html.replace(
-      /data-page="[^"]*"/,
-      `data-page="${escapeHtml(routePattern)}"`,
-    );
+    return html.replace(/data-page="[^"]*"/, `data-page="${routePattern}"`);
   }
-  return html.replace("<body", `<body data-page="${escapeHtml(routePattern)}"`);
+  return html.replace("<body", `<body data-page="${routePattern}"`);
 }
 
-async function importConventionModule(
-  filePath: string,
-  convention: "page" | "layout" | "error",
-) {
-  return measureRequired(
-    routeMeasure,
-    {
-      label: `Import ${convention}`,
-      file: path.basename(filePath),
-      result: () => ({ loaded: true }),
-    },
-    () => import(filePath),
+function isDeclaredAsyncComponent(component: unknown): boolean {
+  return (
+    typeof component === "function" &&
+    Object.prototype.toString.call(component) === "[object AsyncFunction]"
   );
 }
 
-async function wrapWithLayouts(
-  tree: Child,
-  layoutPaths: string[],
-): Promise<Child> {
+function renderServerTree(
+  tree: any,
+  asyncMode: boolean,
+  owner: string,
+): string | Promise<string> {
+  if (asyncMode) return renderToStringAsync(tree);
+
+  try {
+    return renderToString(tree);
+  } catch (error: any) {
+    if (error?.code === "TRADJS_ASYNC_COMPONENT_IN_SYNC_RENDER") {
+      const nested = error.componentName ? ` "${error.componentName}"` : "";
+      const wrapped = new Error(
+        `[tradjs] ${owner} uses synchronous SSR but rendered async component${nested}. Declare the page or participating layout async to opt this route into async SSR.`,
+      );
+      (wrapped as any).cause = error;
+      throw wrapped;
+    }
+    throw error;
+  }
+}
+
+async function wrapWithLayouts(tree: any, layoutPaths: string[]) {
   let wrappedTree = tree;
-
+  let hasAsyncLayout = false;
   for (let i = layoutPaths.length - 1; i >= 0; i--) {
-    const layoutPath = layoutPaths[i];
-    const layoutModule = await importConventionModule(layoutPath, "layout");
+    const layoutModule = await import(layoutPaths[i]);
     const LayoutComponent = layoutModule.default;
-
     if (LayoutComponent) {
+      hasAsyncLayout ||= isDeclaredAsyncComponent(LayoutComponent);
       wrappedTree = createElement(LayoutComponent, { children: wrappedTree });
     }
   }
-
-  return wrappedTree;
+  return { tree: wrappedTree, hasAsyncLayout };
 }
 
-// ─── SPA / Legacy Frontend ──────────────────────────────────────────────────────
+function createClientBootstrap(
+  scripts: { url: string; type: "layout" | "page" }[],
+  params: Record<string, any>,
+): string {
+  if (scripts.length === 0) return "";
+  const scriptEntries = safeJson(scripts);
+  const paramsJson = safeJson(params);
+  const devJson = JSON.stringify(isDev);
+  return `<script type="module">
+const __tradjsDev=${devJson};
+const __tradjsParams=${paramsJson};
+const __tradjsScripts=${scriptEntries};
+const __tradjsDescribeError=(error)=>{
+  if(error instanceof Error)return error.stack||error.message;
+  if(typeof error==='string')return error;
+  try{return JSON.stringify(error,null,2)}catch{return String(error)}
+};
+const __tradjsShowClientError=(error,label='Client error')=>{
+  console.error('[tradjs] '+label,error);
+  let overlay=document.getElementById('__tradjs-error-overlay');
+  if(!overlay){
+    overlay=document.createElement('div');
+    overlay.id='__tradjs-error-overlay';
+    overlay.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#120f12;color:#fff;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:24px;overflow:auto;white-space:normal';
+    const title=document.createElement('h1');
+    title.style.cssText='margin:0 0 16px;font:700 20px/1.3 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#ff6b6b';
+    title.dataset.tradjsErrorTitle='1';
+    overlay.appendChild(title);
+    const detail=document.createElement('pre');
+    detail.style.cssText='margin:0;white-space:pre-wrap;word-break:break-word;background:#1d171d;border:1px solid #3a2c3a;border-radius:8px;padding:16px';
+    detail.dataset.tradjsErrorDetail='1';
+    overlay.appendChild(detail);
+    document.body.appendChild(overlay);
+  }
+  const title=overlay.querySelector('[data-tradjs-error-title]');
+  const detail=overlay.querySelector('[data-tradjs-error-detail]');
+  if(title)title.textContent='TradJS: '+label;
+  if(detail)detail.textContent=__tradjsDev?__tradjsDescribeError(error):'The client failed to start. Check the server and browser logs.';
+};
+window.addEventListener('error',(event)=>__tradjsShowClientError(event.error||event.message,'Unhandled client error'));
+window.addEventListener('unhandledrejection',(event)=>__tradjsShowClientError(event.reason,'Unhandled promise rejection'));
+for(const entry of __tradjsScripts){
+  import(entry.url)
+    .then(async(m)=>{if(typeof m.default==='function')await m.default({params:__tradjsParams})})
+    .catch((error)=>__tradjsShowClientError(error,'Failed to mount '+entry.type+' script'));
+}
+</script>`;
+}
+
+function renderGenericErrorPage(
+  error: unknown,
+  viewTransitions: boolean,
+): string {
+  const value = error as any;
+  const message = value?.message || String(error);
+  const stack = value?.stack || message;
+  const detail = isDev ? stack : "Internal Server Error";
+  return injectViewTransitions(
+    `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>500 - Internal Server Error</title></head><body style="margin:0;background:#120f12;color:#fff;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"><main style="padding:24px;max-width:1200px;margin:0 auto"><h1 style="color:#ff6b6b">500 - Internal Server Error</h1><p>${escapeHtml(isDev ? message : "The request could not be rendered.")}</p><pre style="white-space:pre-wrap;word-break:break-word;background:#1d171d;border:1px solid #3a2c3a;border-radius:8px;padding:16px;overflow:auto">${escapeHtml(detail)}</pre></main></body></html>`,
+    viewTransitions,
+  );
+}
 
 export async function spa(options: FrontendAppOptions): Promise<string> {
   return frontendApp(options);
 }
 
-/** @deprecated Use the createAppRouter() pattern instead. */
 export async function frontendApp(
   options: FrontendAppOptions,
 ): Promise<string> {
-  return measureRequired(
-    routeMeasure,
-    {
-      label: "Render legacy frontend",
-      entrypoint: options.entrypoint,
-      result: (html: string) => ({ bytes: html.length }),
-    },
-    async () => {
-      const {
-        entrypoint,
-        stylePath,
-        title = "Frontend App",
-        viewport = "width=device-width, initial-scale=1",
-        viewTransitions = true,
-        serverData = {},
-        additionalAssets = [],
-        meta = [],
-        head = "",
-        headerScripts = [],
-      } = options;
+  const {
+    entrypoint,
+    stylePath,
+    title = "Frontend App",
+    viewport = "width=device-width, initial-scale=1",
+    viewTransitions = true,
+    serverData = {},
+    additionalAssets = [],
+    meta = [],
+    head = "",
+    headerScripts = [],
+  } = options;
 
-      let stylesVirtualPath = "";
-      if (stylePath) {
-        try {
-          stylesVirtualPath = await buildStyle(stylePath);
-        } catch {
-          await measureNote(routeMeasure, {
-            label: "Legacy style omitted",
-            file: path.basename(stylePath),
-          });
-        }
-      }
+  let stylesVirtualPath = "";
+  if (stylePath) {
+    try {
+      stylesVirtualPath = await buildStyle(stylePath);
+    } catch {
+      console.warn(`Style not found: ${stylePath}`);
+    }
+  }
 
-      const builtAdditionalAssets: Array<{
-        type: string;
-        virtualPath: string;
-      }> = [];
-      for (const asset of additionalAssets) {
-        const virtualPath = await buildAsset(Bun.file(asset.path));
-        if (virtualPath) {
-          builtAdditionalAssets.push({ type: asset.type, virtualPath });
-        }
-      }
+  const assetPaths: string[] = [];
+  for (const asset of additionalAssets) {
+    const virtualPath = await buildAsset(Bun.file(asset.path));
+    if (virtualPath) assetPaths.push(virtualPath);
+  }
 
-      const scriptPath = entrypoint.startsWith("/")
-        ? entrypoint
-        : path.join(process.cwd(), entrypoint);
-
-      const subpathImports = [
+  const scriptPath = entrypoint.startsWith("/")
+    ? entrypoint
+    : path.join(process.cwd(), entrypoint);
+  const packagePath = path.resolve(process.cwd(), "package.json");
+  const packageJson = (await import(packagePath, { assert: { type: "json" } }))
+    .default;
+  const importMaps = `<script type="importmap">${JSON.stringify(
+    await imports(
+      [
         "react-dom/client",
         "react/jsx-dev-runtime",
         "wouter/use-browser-location",
-      ];
+      ],
+      packageJson,
+    ),
+  )}</script>`;
+  const scriptVirtualPath = (await buildScript(scriptPath)) ?? "";
+  if (!scriptVirtualPath)
+    throw new Error(`Failed to build script: ${scriptPath}`);
 
-      const packagePath = path.resolve(process.cwd(), "package.json");
-      const packageJson = (
-        await import(packagePath, { assert: { type: "json" } })
-      ).default;
+  const metaTags = meta
+    .map((item) => `<meta name="${item.name}" content="${item.content}">`)
+    .join("\n");
+  const additionalHead = additionalAssets
+    .map((asset) =>
+      asset.type === "icon"
+        ? `<link rel="icon" type="image/png" href="${assetPaths[0] || ""}">`
+        : "",
+    )
+    .join("\n");
+  const headerScriptsHtml = headerScripts
+    .map((script) => `<script>${script}</script>`)
+    .join("\n");
 
-      const importMaps = `
-   <script type="importmap">
-    ${serializeInlineScript(await imports(subpathImports, packageJson))}
-    </script>
-  `;
-
-      const scriptVirtualPath = (await buildScript(scriptPath)) ?? "";
-      if (!scriptVirtualPath) throw new Error("Failed to build script");
-
-      const metaTags = meta
-        .map(
-          (m) =>
-            `<meta name="${escapeHtml(m.name)}" content="${escapeHtml(m.content)}">`,
-        )
-        .join("\n");
-
-      const additionalHead = builtAdditionalAssets
-        .map(({ type, virtualPath }) =>
-          type === "icon"
-            ? `<link rel="icon" type="image/png" href="${escapeHtml(virtualPath)}">`
-            : "",
-        )
-        .join("\n");
-
-      // These two options are explicit raw HTML/JS escape hatches. Normal
-      // document fields (title, viewport, meta, server data) are encoded.
-      const headerScriptsHtml = headerScripts
-        .map((script) => `<script>${script}</script>`)
-        .join("\n");
-
-      return injectViewTransitions(
-        dedent`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            ${importMaps}
-            <meta charset="utf-8">
-            <meta name="viewport" content="${escapeHtml(viewport)}">
-            ${metaTags}
-            <title>${escapeHtml(title)}</title>
-            ${additionalHead}
-            ${headerScriptsHtml}
-            ${head}
-            ${stylesVirtualPath ? `<link rel="stylesheet" href="${stylesVirtualPath}" >` : ""}
-          </head>
-          <body>
-            <div id="root"></div>
-            <script>
-              window.SERVER_DATA = ${serializeInlineScript(serverData)};
-            </script>
-            <script src="${scriptVirtualPath}" type="module"></script>
-          </body>
-        </html>
-      `,
-        viewTransitions,
-      );
-    },
+  return injectViewTransitions(
+    dedent`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          ${importMaps}
+          <meta charset="utf-8">
+          <meta name="viewport" content="${viewport}">
+          ${metaTags}
+          <title>${title}</title>
+          ${additionalHead}
+          ${headerScriptsHtml}
+          ${head}
+          ${stylesVirtualPath ? `<link rel="stylesheet" href="${stylesVirtualPath}">` : ""}
+        </head>
+        <body>
+          <div id="root"></div>
+          <script>window.SERVER_DATA = ${safeJson(serverData)};</script>
+          <script src="${scriptVirtualPath}" type="module"></script>
+        </body>
+      </html>
+    `,
+    viewTransitions,
   );
 }
 
-// ─── Page Renderer ──────────────────────────────────────────────────────────────
-
-/**
- * Render a page component to HTML with SSR.
- * Used by app router to render route components.
- */
 export async function renderPage(options: RenderPageOptions): Promise<string> {
-  return measureRequired(
-    routeMeasure,
-    {
-      label: "Render standalone page",
-      title: options.title ?? "TradJS App",
-      result: (html: string) => ({ bytes: html.length }),
-    },
-    async () => {
-      const {
-        component: Component,
-        clientComponent,
-        stylePath,
-        title = "TradJS App",
-        params = {},
-        props = {},
-        viewport = "width=device-width, initial-scale=1",
-        viewTransitions = true,
-        meta = [],
-      } = options;
-
-      let stylesVirtualPath = "";
-      if (stylePath) {
-        try {
-          stylesVirtualPath = await buildStyle(stylePath);
-        } catch {
-          await measureNote(routeMeasure, {
-            label: "Standalone style omitted",
-            file: path.basename(stylePath),
-          });
-        }
-      }
-
-      const subpathImports = ["react-dom/client", "react/jsx-dev-runtime"];
-      let importMaps = "";
-      try {
-        importMaps = await measureRequired(
-          routeMeasure,
-          {
-            label: "Generate standalone import map",
-            result: (html: string) => ({ bytes: html.length }),
-          },
-          async () => {
-            const packagePath = path.resolve(process.cwd(), "package.json");
-            const packageJson = (
-              await import(packagePath, { assert: { type: "json" } })
-            ).default;
-            return `
-              <script type="importmap">
-                ${serializeInlineScript(await imports(subpathImports, packageJson))}
-              </script>
-            `;
-          },
-        );
-      } catch (error) {
-        await measureNote(routeMeasure, {
-          label: "Standalone import map omitted",
-          error: errorMessage(error),
-        });
-      }
-
-      let serverHtml = "";
-      try {
-        serverHtml = await measureRequired(
-          routeMeasure,
-          {
-            label: "SSR standalone page",
-            result: (html: string) => ({ bytes: html.length }),
-          },
-          () =>
-            renderToStringAsync(createElement(Component, { ...props, params })),
-        );
-      } catch (error) {
-        await measureNote(routeMeasure, {
-          label: "Standalone SSR fallback to client",
-          error: errorMessage(error),
-        });
-      }
-
-      let scriptVirtualPath = "";
-      if (clientComponent) {
-        try {
-          scriptVirtualPath = await buildScript(clientComponent);
-        } catch {
-          await measureNote(routeMeasure, {
-            label: "Standalone client script omitted",
-            file: path.basename(clientComponent),
-          });
-        }
-      }
-
-      const metaTags = meta
-        .map(
-          (m) =>
-            `<meta name="${escapeHtml(m.name)}" content="${escapeHtml(m.content)}">`,
-        )
-        .join("\n");
-
-      return injectViewTransitions(
-        dedent`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            ${importMaps}
-            <meta charset="utf-8">
-            <meta name="viewport" content="${escapeHtml(viewport)}">
-            ${metaTags}
-            <title>${escapeHtml(title)}</title>
-            ${stylesVirtualPath ? `<link rel="stylesheet" href="${stylesVirtualPath}" >` : ""}
-          </head>
-          <body>
-            <div id="root">${serverHtml}</div>
-            <script>
-              window.__TRADJS_DATA__ = ${serializeInlineScript({ params, props })};
-            </script>
-            ${scriptVirtualPath ? `<script src="${scriptVirtualPath}" type="module"></script>` : ""}
-          </body>
-        </html>
-      `,
-        viewTransitions,
-      );
-    },
-  );
-}
-
-// ─── App Router ─────────────────────────────────────────────────────────────────
-
-/**
- * Create a request handler with file-based routing.
- * Automatically discovers routes from app directory.
- *
- * @example
- * ```ts
- * import { serve, createAppRouter } from 'tradjs/web';
- *
- * serve(createAppRouter({
- *   appDir: './app',
- *   globalCss: './app/globals.css',
- * }));
- * ```
- */
-export function createAppRouter(options: AppRouterOptions = {}): Handler {
   const {
-    appDir = path.join(process.cwd(), "app"),
-    defaultTitle = "TradJS App",
+    component: Component,
+    clientComponent,
+    stylePath,
+    title = "TradJS App",
+    params = {},
+    props = {},
+    viewport = "width=device-width, initial-scale=1",
     viewTransitions = true,
+    meta = [],
   } = options;
 
+  let stylesVirtualPath = "";
+  if (stylePath) {
+    try {
+      stylesVirtualPath = await buildStyle(stylePath);
+    } catch {
+      console.warn(`Style not found: ${stylePath}`);
+    }
+  }
+
+  let importMaps = "";
+  try {
+    const packagePath = path.resolve(process.cwd(), "package.json");
+    const packageJson = (
+      await import(packagePath, { assert: { type: "json" } })
+    ).default;
+    importMaps = `<script type="importmap">${JSON.stringify(
+      await imports(["react-dom/client", "react/jsx-dev-runtime"], packageJson),
+    )}</script>`;
+  } catch (error) {
+    console.warn("Could not generate import map:", error);
+  }
+
+  const serverHtml = await renderServerTree(
+    createElement(Component, { ...props, params }),
+    isDeclaredAsyncComponent(Component),
+    "renderPage() component",
+  );
+
+  let scriptVirtualPath = "";
+  if (clientComponent) {
+    scriptVirtualPath = (await buildScript(clientComponent)) ?? "";
+    if (!scriptVirtualPath) {
+      throw new Error(`Client component build failed: ${clientComponent}`);
+    }
+  }
+
+  const metaTags = meta
+    .map((item) => `<meta name="${item.name}" content="${item.content}">`)
+    .join("\n");
+
+  return injectViewTransitions(
+    dedent`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          ${importMaps}
+          <meta charset="utf-8">
+          <meta name="viewport" content="${viewport}">
+          ${metaTags}
+          <title>${title}</title>
+          ${stylesVirtualPath ? `<link rel="stylesheet" href="${stylesVirtualPath}">` : ""}
+        </head>
+        <body>
+          <div id="root">${serverHtml}</div>
+          <script>window.__TRADJS_DATA__ = ${safeJson({ params, props })};</script>
+          ${scriptVirtualPath ? `<script src="${scriptVirtualPath}" type="module"></script>` : ""}
+        </body>
+      </html>
+    `,
+    viewTransitions,
+  );
+}
+
+export function createAppRouter(options: AppRouterOptions = {}): Handler {
+  const { appDir = path.join(process.cwd(), "app"), viewTransitions = true } =
+    options;
   const routes = discoverRoutes(appDir);
+
   console.log(`📁 Discovered ${routes.length} routes:`);
   routes.forEach((route) => {
     const typeIcon = route.type === "api" ? "⚡" : "📄";
@@ -402,12 +370,11 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
 
   let globalCss = options.globalCss;
   if (!globalCss) {
-    const possiblePaths = [
+    for (const cssPath of [
       path.join(appDir, "globals.css"),
       path.join(appDir, "global.css"),
       path.join(appDir, "app.css"),
-    ];
-    for (const cssPath of possiblePaths) {
+    ]) {
       if (existsSync(cssPath)) {
         globalCss = cssPath;
         console.log(
@@ -417,29 +384,30 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       }
     }
   }
-  // ── SSG: Pre-render eligible pages at startup ──────────────────────────
+
   if (!isDev) {
-    (async () => {
+    void (async () => {
       try {
-        const count = await ssgPrerender(routes, async (route) => {
-          const pageModule = await importConventionModule(
-            route.filePath,
-            "page",
-          );
+        const count = await ssgPrerender(routes, async (route: any) => {
+          const pageModule = await import(route.filePath);
           const PageComponent = pageModule.default || pageModule.Page;
           if (!PageComponent) {
             throw new Error(`No default export in ${route.filePath}`);
           }
 
-          const tree = await wrapWithLayouts(
+          const pageIsAsync = isDeclaredAsyncComponent(PageComponent);
+          const wrapped = await wrapWithLayouts(
             createElement(PageComponent, { params: {} }),
             route.layouts,
           );
 
-          const { value: html, head: headElements } = await collectHeadAsync(
-            () => renderToStringAsync(tree),
+          resetHead();
+          const html = await renderServerTree(
+            wrapped.tree,
+            pageIsAsync || wrapped.hasAsyncLayout,
+            `SSG route ${route.pattern}`,
           );
-
+          const headElements = getHeadElements();
           let fullHtml = `<!DOCTYPE html>${html}`;
 
           if (globalCss) {
@@ -449,23 +417,22 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
                 "</head>",
                 `<link rel="stylesheet" href="${stylesPath}"></head>`,
               );
-            } catch {
-              await measureNote(routeMeasure, {
-                label: "SSG global CSS omitted",
-                route: route.pattern,
-              });
-            }
+            } catch {}
           }
 
-          fullHtml = injectHeadElements(fullHtml, headElements, defaultTitle);
-          fullHtml = applyRouteBodyAttributes(fullHtml, route.pattern);
+          if (headElements.length > 0) {
+            fullHtml = fullHtml.replace(
+              "</head>",
+              `${headElements.join("\n")}</head>`,
+            );
+          }
 
+          fullHtml = applyRouteBodyAttributes(fullHtml, route.pattern);
           return injectViewTransitions(fullHtml, viewTransitions);
         });
         if (count > 0) console.log(`⚡ SSG: Pre-rendered ${count} pages`);
-      } catch {
-        // The failed SSG measurement already owns the diagnostic. Startup keeps
-        // serving dynamically instead of creating a duplicate console warning.
+      } catch (error: any) {
+        console.warn("SSG prerender failed:", error?.message || error);
       }
     })();
   }
@@ -473,7 +440,6 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
   return async (req: Request) => {
     const url = new URL(req.url);
     const pathname = url.pathname;
-
     const match = matchRoute(pathname, routes);
 
     if (!match) {
@@ -487,7 +453,6 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       });
     }
 
-    // ── SSG: serve pre-rendered page from memory ──────────────────
     if (!isDev && match.route.type === "page") {
       const cached = getPrerendered(pathname);
       if (cached) {
@@ -502,398 +467,321 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
     }
 
     try {
-      return await measureRequired(
-        routeMeasure,
-        {
-          label: "Route dispatch",
-          route: match.route.pattern,
-          routeType: match.route.type,
-          method: req.method,
-          result: (response: Response) => ({ status: response.status }),
-        },
-        async () => {
-          // ── Middleware Chain ─────────────────────────────────────────────
-          // Execute middleware.ts files from root→page (outermost first).
-          // Each middleware can short-circuit by returning a Response.
-          if (match.route.middlewares.length > 0) {
-            for (const mwPath of match.route.middlewares) {
-              const mwResult = await measureRequired(
-                routeMeasure,
-                {
-                  label: "Middleware",
-                  route: match.route.pattern,
-                  middleware: path.basename(path.dirname(mwPath)),
-                  result: (result: unknown) =>
-                    result instanceof Response
-                      ? { status: result.status }
-                      : {
-                          outcome: result === undefined ? "continue" : "value",
-                        },
-                },
-                async () => {
-                  const mwModule = await import(mwPath);
-                  const mwFn = mwModule.default || mwModule.middleware;
-                  if (typeof mwFn === "function") {
-                    return await mwFn(req, {
-                      params: match.params,
-                      route: match.route,
-                    });
-                  }
-                },
-              );
-              // If middleware returns a Response, short-circuit
-              if (mwResult instanceof Response) return mwResult;
-            }
-          }
-
-          // Handle API routes
-          if (match.route.type === "api") {
-            const method = req.method.toUpperCase();
-            return measureRequired(
-              routeMeasure,
-              {
-                label: "API route",
-                route: match.route.pattern,
-                method,
-                result: (response: Response) => ({ status: response.status }),
+      if (match.route.middlewares.length > 0) {
+        for (const mwPath of match.route.middlewares) {
+          const mwResult = await httpMeasure.measure(
+            {
+              start: () => `Middleware: ${path.basename(path.dirname(mwPath))}`,
+              end: (result: unknown) =>
+                result instanceof Response
+                  ? { status: result.status }
+                  : { result: result === undefined ? "continue" : "value" },
+              catch: (error: unknown) => {
+                throw error;
               },
-              async () => {
-                const apiModule = await import(match.route.filePath);
-                const handler = apiModule[method] || apiModule.default;
-
-                if (!handler) {
-                  return new Response("Method Not Allowed", { status: 405 });
-                }
-
-                const response = await handler(req, { params: match.params });
-                return response instanceof Response
-                  ? response
-                  : new Response(JSON.stringify(response), {
-                      headers: { "Content-Type": "application/json" },
-                    });
-              },
-            );
-          }
-
-          // Handle Page routes
-          const pageModule = await importConventionModule(
-            match.route.filePath,
-            "page",
-          );
-          const PageComponent = pageModule.default || pageModule.Page;
-
-          if (!PageComponent) {
-            throw new Error(
-              `No default export found in ${match.route.filePath}`,
-            );
-          }
-
-          const pageTree = createElement(PageComponent, {
-            params: match.params,
-          });
-
-          let stylesVirtualPath = "";
-          if (globalCss) {
-            try {
-              stylesVirtualPath = await buildStyle(globalCss);
-            } catch {
-              await measureNote(routeMeasure, {
-                label: "Global CSS omitted",
-                route: match.route.pattern,
-              });
-            }
-          }
-
-          // Build page-scoped CSS if page.css exists alongside page.tsx
-          let scopedStylePath = "";
-          const pageCssPath = styleCompanionPath(match.route.filePath);
-          if (existsSync(pageCssPath)) {
-            try {
-              scopedStylePath = await buildScopedStyle(
-                pageCssPath,
-                match.route.pattern,
-              );
-            } catch {
-              await measureNote(routeMeasure, {
-                label: "Scoped CSS omitted",
-                route: match.route.pattern,
-              });
-            }
-          }
-
-          const clientScriptUrls: { url: string; type: "layout" | "page" }[] =
-            [];
-
-          for (const layoutPath of match.route.layouts) {
-            const layoutClientPath = clientCompanionPath(layoutPath);
-            if (existsSync(layoutClientPath)) {
-              const scriptPath = await buildClientScript(layoutClientPath);
-              clientScriptUrls.push({ url: scriptPath, type: "layout" });
-            }
-          }
-
-          const pageClientPath = clientCompanionPath(match.route.filePath);
-          if (existsSync(pageClientPath)) {
-            try {
-              const scriptPath = await buildClientScript(pageClientPath);
-              if (scriptPath) {
-                clientScriptUrls.push({ url: scriptPath, type: "page" });
-              }
-            } catch {
-              await measureNote(routeMeasure, {
-                label: "Page client omitted",
-                route: match.route.pattern,
-              });
-            }
-          }
-
-          const clientScriptTags: string[] = [];
-          if (clientScriptUrls.length > 0) {
-            const paramsJson = serializeInlineScript(match.params);
-            const bootstrapLines = clientScriptUrls.map(({ url, type }) => {
-              return `import('${url}').then(m => { if (typeof m.default === 'function') m.default({ params }); }).catch(e => console.error('[tradjs] Failed to mount ${type} script:', e));`;
-            });
-            clientScriptTags.push(
-              `<script type="module">\nconst params = ${paramsJson};\n${bootstrapLines.join("\n")}\n</script>`,
-            );
-          }
-
-          const allClientPaths = [
-            ...match.route.layouts.map(clientCompanionPath).filter(existsSync),
-            ...(existsSync(pageClientPath) ? [pageClientPath] : []),
-          ];
-          const needsReactImportMap = allClientPaths.some((p) =>
-            clientScriptsUsingReact.has(p),
-          );
-
-          let importMapTag = "";
-          if (needsReactImportMap) {
-            try {
-              const importMapJson = serializeInlineScript(
-                await imports(["react-dom/client", "react/jsx-dev-runtime"]),
-              );
-              importMapTag = `<script type="importmap">${importMapJson}</script>`;
-            } catch {
-              await measureNote(routeMeasure, {
-                label: "React import map omitted",
-                route: match.route.pattern,
-              });
-            }
-          }
-          const responseHeaders = {
-            "Content-Type": "text/html",
-            "Cache-Control": isDev ? "no-cache" : "public, max-age=3600",
-          };
-
-          const pageRender = await measureRequired(
-            routeMeasure,
-            {
-              label: "SSR render page",
-              route: match.route.pattern,
-              result: (rendered: HeadCollection<string>) => ({
-                bytes: rendered.value.length,
-                headElements: rendered.head.length,
-              }),
             },
-            () => collectHeadAsync(() => renderToStringAsync(pageTree)),
-          );
-          const pageHtml = pageRender.value;
-          const pageHeadElements = pageRender.head;
-
-          const slotTree = await wrapWithLayouts(
-            createElement("tradjs-stream-slot", {}),
-            match.route.layouts,
-          );
-
-          const shellRender = await measureRequired(
-            routeMeasure,
-            {
-              label: "SSR render shell",
-              route: match.route.pattern,
-              result: (rendered: HeadCollection<string>) => ({
-                bytes: rendered.value.length,
-                headElements: rendered.head.length,
-              }),
-            },
-            () => collectHeadAsync(() => renderToStringAsync(slotTree)),
-          );
-          const shellHtmlOnly = shellRender.value;
-          const layoutHeadElements = shellRender.head;
-          const headElements = [...layoutHeadElements, ...pageHeadElements];
-
-          let shellHtml = `<!DOCTYPE html>${shellHtmlOnly}`;
-
-          if (stylesVirtualPath) {
-            shellHtml = shellHtml.replace(
-              "</head>",
-              `<link rel="stylesheet" href="${stylesVirtualPath}"></head>`,
-            );
-          }
-
-          if (scopedStylePath) {
-            shellHtml = shellHtml.replace(
-              "</head>",
-              `<link rel="stylesheet" href="${scopedStylePath}"></head>`,
-            );
-          }
-
-          shellHtml = applyRouteBodyAttributes(shellHtml, match.route.pattern);
-
-          shellHtml = injectHeadElements(shellHtml, headElements, defaultTitle);
-
-          if (importMapTag) {
-            shellHtml = shellHtml.replace("</head>", `${importMapTag}</head>`);
-          }
-
-          shellHtml = injectViewTransitions(shellHtml, viewTransitions);
-
-          const slotIndex = shellHtml.indexOf(STREAM_SLOT_MARKUP);
-
-          if (slotIndex === -1) {
-            let fullHtml = shellHtml + pageHtml;
-
-            if (clientScriptTags.length > 0) {
-              fullHtml = fullHtml.replace(
-                "</body>",
-                `${clientScriptTags.join("\n")}</body>`,
-              );
-            }
-
-            return new Response(fullHtml, { headers: responseHeaders });
-          }
-
-          const prefix = shellHtml.slice(0, slotIndex);
-          let suffix = shellHtml.slice(slotIndex + STREAM_SLOT_MARKUP.length);
-
-          if (clientScriptTags.length > 0) {
-            suffix = suffix.replace(
-              "</body>",
-              `${clientScriptTags.join("\n")}</body>`,
-            );
-          }
-
-          const encoder = new TextEncoder();
-          const stream = new ReadableStream({
-            start(controller) {
-              controller.enqueue(encoder.encode(prefix));
-              controller.enqueue(encoder.encode(pageHtml));
-              controller.enqueue(encoder.encode(suffix));
-              controller.close();
-            },
-          });
-
-          return new Response(stream, { headers: responseHeaders });
-        },
-      );
-    } catch (error) {
-      const message = errorMessage(error);
-      const stack = errorStack(error);
-
-      // ── Error Boundary: render error.tsx if available ────────────
-      if (match.route.errorPath) {
-        try {
-          const boundaryResponse = await measureRequired(
-            routeMeasure,
-            {
-              label: "Render error boundary",
-              route: match.route.pattern,
-              file: path.basename(match.route.errorPath),
-              result: (response: Response | null) =>
-                response
-                  ? { status: response.status }
-                  : { outcome: "no component" },
-            },
-            async (): Promise<Response | null> => {
-              const errorModule = await importConventionModule(
-                match.route.errorPath!,
-                "error",
-              );
-              const ErrorComponent = errorModule.default;
-              if (!ErrorComponent) return null;
-
-              const errorProps = {
-                error: {
-                  message: isDev ? message : "Internal Server Error",
-                  stack: isDev ? stack : undefined,
-                },
-                pathname: url.pathname,
-              };
-              const errorTree = await wrapWithLayouts(
-                createElement(ErrorComponent, errorProps),
-                match.route.layouts,
-              );
-
-              const { value: errorHtml, head: errorHeadElements } =
-                await collectHeadAsync(() => renderToStringAsync(errorTree));
-              let fullErrorHtml = `<!DOCTYPE html>${errorHtml}`;
-
-              fullErrorHtml = injectHeadElements(
-                fullErrorHtml,
-                errorHeadElements,
-              );
-
-              if (globalCss) {
-                try {
-                  const stylesPath = await buildStyle(globalCss);
-                  fullErrorHtml = fullErrorHtml.replace(
-                    "</head>",
-                    `<link rel="stylesheet" href="${stylesPath}"></head>`,
-                  );
-                } catch {
-                  await measureNote(routeMeasure, {
-                    label: "Error-page CSS omitted",
-                    route: match.route.pattern,
-                  });
-                }
-              }
-
-              fullErrorHtml = injectViewTransitions(
-                fullErrorHtml,
-                viewTransitions,
-              );
-
-              return new Response(fullErrorHtml, {
-                status: 500,
-                headers: { "Content-Type": "text/html" },
-              });
+            async () => {
+              const mwModule = await import(mwPath);
+              const mwFn = mwModule.default || mwModule.middleware;
+              return typeof mwFn === "function"
+                ? mwFn(req, {
+                    params: match.params,
+                    route: match.route,
+                  })
+                : undefined;
             },
           );
-
-          if (boundaryResponse) return boundaryResponse;
-        } catch {
-          await measureNote(routeMeasure, {
-            label: "Using generic 500 fallback",
-            route: match.route.pattern,
-          });
+          if (mwResult instanceof Response) return mwResult;
         }
       }
 
-      // Generic fallback error page
-      return new Response(
-        injectViewTransitions(
-          `
-        <!DOCTYPE html>
-        <html>
-          <head><meta charset="utf-8"><title>500 - Internal Server Error</title></head>
-          <body>
-            <h1>500 - Internal Server Error</h1>
-            <pre>${isDev ? escapeHtml(stack) : "An error occurred"}</pre>
-            <p>${isDev ? `Error: ${escapeHtml(message)}` : "Please try again later."}</p>
-          </body>
-        </html>
-      `,
-          viewTransitions,
-        ),
+      if (match.route.type === "api") {
+        return httpMeasure.measure(
+          {
+            start: () => `API: ${match.route.pattern}`,
+            end: (response: Response) => ({ status: response.status }),
+            catch: (error: unknown) => {
+              throw error;
+            },
+          },
+          async () => {
+            const apiModule = await import(match.route.filePath);
+            const method = req.method.toUpperCase();
+            const handler = apiModule[method] || apiModule.default;
+            if (!handler) {
+              return new Response("Method Not Allowed", { status: 405 });
+            }
+            const response = await handler(req, { params: match.params });
+            return response instanceof Response
+              ? response
+              : new Response(JSON.stringify(response), {
+                  headers: { "Content-Type": "application/json" },
+                });
+          },
+        );
+      }
+
+      const pageModule = await httpMeasure.measure(
         {
-          status: 500,
-          headers: { "Content-Type": "text/html" },
+          start: () => "Import page",
+          end: () => ({ file: path.basename(match.route.filePath) }),
+          catch: (error: unknown) => {
+            throw error;
+          },
         },
+        () => import(match.route.filePath),
       );
+      const PageComponent = pageModule.default || pageModule.Page;
+      if (!PageComponent) {
+        throw new Error(`No default export found in ${match.route.filePath}`);
+      }
+      const pageTree = createElement(PageComponent, { params: match.params });
+
+      let stylesVirtualPath = "";
+      if (globalCss) {
+        try {
+          stylesVirtualPath = await buildStyle(globalCss);
+        } catch (error) {
+          console.warn("Failed to build global CSS:", error);
+        }
+      }
+
+      let scopedStylePath = "";
+      const pageCssPath = match.route.filePath.replace(
+        /\.(tsx?|jsx?)$/,
+        ".css",
+      );
+      if (existsSync(pageCssPath)) {
+        try {
+          scopedStylePath = await buildScopedStyle(
+            pageCssPath,
+            match.route.pattern,
+          );
+        } catch (error) {
+          console.warn("Failed to build scoped CSS:", error);
+        }
+      }
+
+      const clientScriptUrls: { url: string; type: "layout" | "page" }[] = [];
+      for (const layoutPath of match.route.layouts) {
+        const layoutClientPath = layoutPath.replace(/\.tsx?$/, ".client.tsx");
+        if (existsSync(layoutClientPath)) {
+          const scriptPath = await buildClientScript(layoutClientPath);
+          if (!scriptPath) {
+            throw new Error(
+              `[tradjs] Layout client bundle produced no output: ${layoutClientPath}`,
+            );
+          }
+          clientScriptUrls.push({ url: scriptPath, type: "layout" });
+        }
+      }
+
+      const pageClientPath = match.route.filePath.replace(
+        /\.tsx?$/,
+        ".client.tsx",
+      );
+      if (existsSync(pageClientPath)) {
+        const scriptPath = await buildClientScript(pageClientPath);
+        if (!scriptPath) {
+          throw new Error(
+            `[tradjs] Page client bundle produced no output: ${pageClientPath}`,
+          );
+        }
+        clientScriptUrls.push({ url: scriptPath, type: "page" });
+      }
+
+      const clientBootstrap = createClientBootstrap(
+        clientScriptUrls,
+        match.params,
+      );
+      const allClientPaths = [
+        ...match.route.layouts
+          .map((layoutPath: string) =>
+            layoutPath.replace(/\.tsx?$/, ".client.tsx"),
+          )
+          .filter(existsSync),
+        ...(existsSync(pageClientPath) ? [pageClientPath] : []),
+      ];
+      const needsReactImportMap = allClientPaths.some((clientPath) =>
+        clientScriptsUsingReact.has(clientPath),
+      );
+
+      let importMapTag = "";
+      if (needsReactImportMap) {
+        try {
+          const importMapJson = JSON.stringify(
+            await imports(["react-dom/client", "react/jsx-dev-runtime"]),
+          );
+          importMapTag = `<script type="importmap">${importMapJson}</script>`;
+        } catch (error) {
+          console.warn("Failed to generate React import maps:", error);
+        }
+      }
+
+      const responseHeaders = {
+        "Content-Type": "text/html",
+        "Cache-Control": isDev ? "no-cache" : "public, max-age=3600",
+      };
+
+      const pageIsAsync = isDeclaredAsyncComponent(PageComponent);
+
+      resetHead();
+      const pageHtml = await httpMeasure.measure(
+        {
+          start: () => "SSR renderPage",
+          end: (html: string) => ({ bytes: html.length }),
+          catch: (error: unknown) => {
+            throw error;
+          },
+        },
+        () =>
+          renderServerTree(
+            pageTree,
+            pageIsAsync,
+            `page ${match.route.pattern}`,
+          ),
+      );
+      const pageHeadElements = [...getHeadElements()];
+
+      const wrappedShell = await wrapWithLayouts(
+        createElement("tradjs-stream-slot", {}),
+        match.route.layouts,
+      );
+      resetHead();
+      const shellHtmlOnly = await httpMeasure.measure(
+        {
+          start: () => "SSR renderShell",
+          end: (html: string) => ({ bytes: html.length }),
+          catch: (error: unknown) => {
+            throw error;
+          },
+        },
+        () =>
+          renderServerTree(
+            wrappedShell.tree,
+            wrappedShell.hasAsyncLayout,
+            `layout shell for ${match.route.pattern}`,
+          ),
+      );
+      const layoutHeadElements = [...getHeadElements()];
+      const headElements = [...layoutHeadElements, ...pageHeadElements];
+
+      let shellHtml = `<!DOCTYPE html>${shellHtmlOnly}`;
+      if (stylesVirtualPath) {
+        shellHtml = shellHtml.replace(
+          "</head>",
+          `<link rel="stylesheet" href="${stylesVirtualPath}"></head>`,
+        );
+      }
+      if (scopedStylePath) {
+        shellHtml = shellHtml.replace(
+          "</head>",
+          `<link rel="stylesheet" href="${scopedStylePath}"></head>`,
+        );
+      }
+
+      shellHtml = applyRouteBodyAttributes(shellHtml, match.route.pattern);
+      if (headElements.length > 0) {
+        shellHtml = shellHtml.replace(
+          "</head>",
+          `${headElements.join("\n")}</head>`,
+        );
+      }
+      if (importMapTag) {
+        shellHtml = shellHtml.replace("</head>", `${importMapTag}</head>`);
+      }
+      shellHtml = injectViewTransitions(shellHtml, viewTransitions);
+
+      const slotIndex = shellHtml.indexOf(STREAM_SLOT_MARKUP);
+      if (slotIndex === -1) {
+        let fullHtml = shellHtml + pageHtml;
+        if (clientBootstrap) {
+          fullHtml = fullHtml.replace("</body>", `${clientBootstrap}</body>`);
+        }
+        return new Response(fullHtml, { headers: responseHeaders });
+      }
+
+      const prefix = shellHtml.slice(0, slotIndex);
+      let suffix = shellHtml.slice(slotIndex + STREAM_SLOT_MARKUP.length);
+      if (clientBootstrap) {
+        suffix = suffix.replace("</body>", `${clientBootstrap}</body>`);
+      }
+
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(prefix));
+          controller.enqueue(encoder.encode(pageHtml));
+          controller.enqueue(encoder.encode(suffix));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: responseHeaders });
+    } catch (error: any) {
+      console.error("Error rendering page:", error);
+      const errorMessage = error?.message || String(error);
+      const errorStack = error?.stack || "No stack trace available";
+
+      if (match.route.errorPath) {
+        try {
+          const errorModule = await import(match.route.errorPath);
+          const ErrorComponent = errorModule.default;
+          if (ErrorComponent) {
+            const errorProps = {
+              error: {
+                message: errorMessage,
+                stack: isDev ? errorStack : undefined,
+              },
+              pathname: url.pathname,
+            };
+            const errorIsAsync = isDeclaredAsyncComponent(ErrorComponent);
+            const wrappedError = await wrapWithLayouts(
+              createElement(ErrorComponent, errorProps),
+              match.route.layouts,
+            );
+
+            const errorHtml = await renderServerTree(
+              wrappedError.tree,
+              errorIsAsync || wrappedError.hasAsyncLayout,
+              `error boundary for ${match.route.pattern}`,
+            );
+            let fullErrorHtml = `<!DOCTYPE html>${errorHtml}`;
+            if (globalCss) {
+              try {
+                const stylesPath = await buildStyle(globalCss);
+                fullErrorHtml = fullErrorHtml.replace(
+                  "</head>",
+                  `<link rel="stylesheet" href="${stylesPath}"></head>`,
+                );
+              } catch {}
+            }
+            fullErrorHtml = injectViewTransitions(
+              fullErrorHtml,
+              viewTransitions,
+            );
+            return new Response(fullErrorHtml, {
+              status: 500,
+              headers: {
+                "Content-Type": "text/html",
+                "Cache-Control": "no-store",
+              },
+            });
+          }
+        } catch (errorBoundaryError) {
+          console.error("Error boundary itself failed:", errorBoundaryError);
+        }
+      }
+
+      return new Response(renderGenericErrorPage(error, viewTransitions), {
+        status: 500,
+        headers: {
+          "Content-Type": "text/html",
+          "Cache-Control": "no-store",
+        },
+      });
     }
   };
 }
-
-// ─── Quick Start ────────────────────────────────────────────────────────────────
 
 const DEFAULT_APP_DIR_NAME = "app";
 
@@ -915,11 +803,7 @@ function hasConventionRoutes(dir: string): boolean {
     "loading.tsx",
     "loading.ts",
   ];
-
-  if (existsSync(path.join(dir, "api"))) {
-    return true;
-  }
-
+  if (existsSync(path.join(dir, "api"))) return true;
   return routeSignals.some((file) => existsSync(path.join(dir, file)));
 }
 
@@ -931,14 +815,10 @@ export function resolveAppDir(appDir?: string): string {
   }
 
   const defaultAppDir = path.resolve(process.cwd(), DEFAULT_APP_DIR_NAME);
-  if (existsSync(defaultAppDir)) {
-    return defaultAppDir;
-  }
+  if (existsSync(defaultAppDir)) return defaultAppDir;
 
   const cwd = process.cwd();
-  if (hasConventionRoutes(cwd)) {
-    return cwd;
-  }
+  if (hasConventionRoutes(cwd)) return cwd;
 
   throw new Error(
     `Could not find a TradJS app. Looked for ./${DEFAULT_APP_DIR_NAME}/ first, then route files in ${cwd}.`,
@@ -948,43 +828,27 @@ export function resolveAppDir(appDir?: string): string {
 export interface ServeAppOptions extends AppRouterOptions {
   port?: number;
   unix?: string;
-  websocket?: unknown;
-  /** Opt in to process-wide SIGINT/SIGTERM ownership (used by the CLI). */
-  handleSignals?: boolean;
 }
 
-type TradJSServer = Awaited<ReturnType<typeof serveHttp>>;
-
-export async function serve(options?: ServeAppOptions): Promise<TradJSServer>;
+export async function serve(options?: ServeAppOptions): Promise<any>;
 export async function serve(
   handler: Handler,
-  options?: HttpServeOptions,
-): Promise<TradJSServer>;
+  options?: { port?: number; unix?: string; websocket?: any },
+): Promise<any>;
 export async function serve(
   handlerOrOptions?: Handler | ServeAppOptions,
-  serverOptions?: HttpServeOptions,
+  serverOptions?: { port?: number; unix?: string; websocket?: any },
 ) {
   if (typeof handlerOrOptions === "function") {
     return serveHttp(handlerOrOptions, serverOptions);
   }
-
   const options = handlerOrOptions ?? {};
-  const { port, unix, websocket, handleSignals, ...routerOptions } = options;
+  const { port, unix, ...routerOptions } = options;
   const appDir = resolveAppDir(routerOptions.appDir);
   const router = createAppRouter({ ...routerOptions, appDir });
-  return serveHttp(router, { port, unix, websocket, handleSignals });
+  return serveHttp(router, { port, unix });
 }
 
-/**
- * Start a TradJS server with file-based routing in one call.
- * Combines createAppRouter() + serve() for convenience.
- *
- * @example
- * ```ts
- * import { start } from 'tradjs';
- * await start({ appDir: './app', port: 3000 });
- * ```
- */
 export async function start(options: ServeAppOptions = {}) {
   return serve(options);
 }

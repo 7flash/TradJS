@@ -1,23 +1,14 @@
-/**
- * tradjs/client — Types
- *
- * Shared type definitions for both client and server rendering.
- * This file has zero runtime code and is fully tree-shakeable.
- */
-
-export type VNode = {
-  type: string | Component<any> | typeof Fragment;
-  props: Props;
-  key: string | number | null;
-};
-
 export type Props = Record<string, any> & { children?: Child | Child[] };
 export type Child = VNode | string | number | boolean | null | undefined;
 export type Component<P = Props> = (props: P) => VNode | null;
-
+export type AsyncComponent<P = Props> = (props: P) => Promise<VNode | null>;
 export const Fragment = Symbol("Fragment");
 
-// ─── HTML Attribute Types ──────────────────────────────────────────────────────
+export type VNode = {
+  type: string | Component<any> | AsyncComponent<any> | typeof Fragment;
+  props: Props;
+  key: string | number | null;
+};
 
 type EventHandler<E = Event> = (event: E) => void;
 
@@ -36,10 +27,8 @@ export interface HTMLAttributes {
   draggable?: boolean;
   spellCheck?: boolean;
   contentEditable?: boolean | "true" | "false" | "inherit";
-
   "aria-label"?: string;
   "aria-hidden"?: boolean | "true" | "false";
-
   onClick?: EventHandler<MouseEvent>;
   onContextMenu?: EventHandler<MouseEvent>;
   onDoubleClick?: EventHandler<MouseEvent>;
@@ -58,23 +47,18 @@ export interface HTMLAttributes {
   onMouseOut?: EventHandler<MouseEvent>;
   onMouseOver?: EventHandler<MouseEvent>;
   onMouseUp?: EventHandler<MouseEvent>;
-
   onChange?: EventHandler<Event>;
   onInput?: EventHandler<Event>;
   onSubmit?: EventHandler<Event>;
   onInvalid?: EventHandler<Event>;
   onReset?: EventHandler<Event>;
-
   onKeyDown?: EventHandler<KeyboardEvent>;
   onKeyPress?: EventHandler<KeyboardEvent>;
   onKeyUp?: EventHandler<KeyboardEvent>;
-
   onFocus?: EventHandler<FocusEvent>;
   onBlur?: EventHandler<FocusEvent>;
-
   onScroll?: EventHandler<Event>;
   onWheel?: EventHandler<WheelEvent>;
-
   [key: string]: any;
 }
 
@@ -120,15 +104,15 @@ export interface InputHTMLAttributes extends HTMLAttributes {
   width?: number | string;
 }
 
-// ─── JSX Namespace ─────────────────────────────────────────────────────────────
-
 export namespace JSX {
   export type Element = VNode;
-  export type ElementType = string | Component<any> | typeof Fragment;
+  export type ElementType =
+    string | Component<any> | AsyncComponent<any> | typeof Fragment;
 
   export interface ElementAttributesProperty {
     props: {};
   }
+
   export interface ElementChildrenAttribute {
     children: {};
   }

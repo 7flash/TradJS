@@ -147,7 +147,7 @@ export default function ScopedCssDemoPage() {
             </tr>
             <tr>
               <td style={{ padding: "8px", fontWeight: "600" }}>
-                Melina page.css
+                TradJS page.css
               </td>
               <td style={{ padding: "8px" }}>✅ Auto-prefixed</td>
               <td style={{ padding: "8px", color: "#10b981" }}>

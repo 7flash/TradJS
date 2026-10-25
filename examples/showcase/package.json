@@ -1,7 +1,12 @@
 {
-    "name": "melina-showcase",
-    "private": true,
-    "dependencies": {
-        "xstate": "^5.19.0"
-    }
+  "name": "tradjs-showcase",
+  "private": true,
+  "dependencies": {
+    "xstate": "^5.19.0",
+    "tradjs": "link:../.."
+  },
+  "scripts": {
+    "dev": "bun ../../bin/tradjs.ts serve",
+    "build": "bun ../../bin/tradjs.ts build"
+  }
 }

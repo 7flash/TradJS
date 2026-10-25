@@ -2,82 +2,51 @@ export default function CounterPage() {
   return (
     <div className="page">
       <div className="page-header">
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "10px",
-            marginBottom: "6px",
-          }}
-        >
-          <h1 className="page-title">Client Interactivity</h1>
-          <span className="badge badge-client">Client Mount</span>
-        </div>
+        <h1 className="page-title">Counter</h1>
         <p className="page-description">
-          The server renders this container with a placeholder. A client mount
-          script (<code className="code-inline">page.client.tsx</code>) runs
-          after hydration and takes over the{" "}
-          <code className="code-inline">#counter-root</code> element using
-          Melina's <code className="code-inline">render()</code> API.
+          A controller changes ordinary state and explicitly renders a JSX view.
+          The renderer reuses matching DOM nodes and patches the changed text.
         </p>
       </div>
-
       <div className="demo-card">
-        <h3 className="demo-card-title">🔢 Counter</h3>
-        <p className="demo-card-description">
-          A vanilla counter using <code className="code-inline">render()</code>{" "}
-          — no framework, no state library. Each click calls{" "}
-          <code className="code-inline">render(vnode, el)</code> which diffs the
-          VDOM and patches only changed nodes.
-        </p>
+        <h2 className="demo-card-title">Try it</h2>
         <div
           id="counter-root"
           className="result-box"
           style={{ textAlign: "center", padding: "32px" }}
         >
-          <span style={{ color: "var(--color-muted)" }}>
-            Loading client script...
-          </span>
+          Loading counter…
         </div>
+        <noscript>Enable JavaScript to use the counter.</noscript>
       </div>
-
       <div className="demo-card">
-        <h3 className="demo-card-title">⏱️ Lifecycle</h3>
+        <h2 className="demo-card-title">Document lifetime</h2>
         <p className="demo-card-description">
-          Mount scripts follow the normal browser document lifecycle. A new
-          document gets a new module graph; browser Back/Forward may restore a
-          previous document from BFCache instead of rebuilding it.
+          The server renders the page; the browser initializer mounts the
+          counter into its container. This is a fresh client mount, not
+          hydration. A new document gets fresh state, while browser Back/Forward
+          may restore a previous document.
         </p>
-        <div id="lifecycle-root" className="result-box">
-          <span style={{ color: "var(--color-muted)" }}>
-            Waiting for mount...
-          </span>
-        </div>
+        <div id="lifecycle-root" className="result-box" />
       </div>
-
       <div className="demo-card">
-        <h3 className="demo-card-title">📝 How It Works</h3>
-        <div className="code-block">{`// app/counter/page.client.tsx
-import { render } from 'tradjs/client';
+        <h2 className="demo-card-title">The complete pattern</h2>
+        <div className="code-block">{`import { render } from "tradjs/client";
 
-let count = 0;
-
-function Counter() {
-    return (
-        <div>
-            <div style={{ fontSize: '3rem' }}>{count}</div>
-            <button onclick={() => { count--; update(); }}>- 1</button>
-            <button onclick={() => { count++; update(); }}>+ 1</button>
-            <button onclick={() => { count = 0; update(); }}>Reset</button>
-        </div>
-    );
-}
-
-function update() { render(<Counter />, root); }
-
-export default function mount() {
-    const root = document.getElementById('counter-root');
-    update();
+export default function initializePage() {
+  const root = document.getElementById("counter-root");
+  if (!root) return;
+  const state = { count: 0 };
+  const controller = {
+    increment() {
+      state.count++;
+      render(<Counter />, root);
+    },
+  };
+  function Counter() {
+    return <button onClick={controller.increment}>{state.count}</button>;
+  }
+  render(<Counter />, root);
 }`}</div>
       </div>
     </div>

@@ -2,7 +2,8 @@
   "compilerOptions": {
     "lib": [
       "ESNext",
-      "DOM"
+      "DOM",
+      "DOM.Iterable"
     ],
     "target": "ESNext",
     "module": "ESNext",
@@ -15,24 +16,6 @@
         "./src/web.ts"
       ],
       "tradjs/*": [
-        "./src/*"
-      ],
-      "fastjs": [
-        "./src/web.ts"
-      ],
-      "fastjs/*": [
-        "./src/*"
-      ],
-      "lastjs": [
-        "./src/web.ts"
-      ],
-      "lastjs/*": [
-        "./src/*"
-      ],
-      "melina": [
-        "./src/web.ts"
-      ],
-      "melina/*": [
         "./src/*"
       ]
     },

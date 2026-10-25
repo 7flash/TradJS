@@ -42,3 +42,6 @@ bun.lock
 
 package-lock.json
 bun.lock
+
+manifest.json
+validation.json

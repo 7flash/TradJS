@@ -1,6 +1,6 @@
 # TradJS 🦊
 
-**Bun-first web framework with file-system routing, SSR, full-body client navigation, API routes, scoped CSS, SSG, middleware, error boundaries, and a tiny JSX renderer.**
+**Bun-first web framework with file-system routing, SSR, native browser navigation, API routes, scoped CSS, SSG, middleware, error boundaries, and a tiny JSX renderer.**
 
 ```sh
 npx tradjs init my-app
@@ -13,7 +13,6 @@ Open:
 ```txt
 http://localhost:3000
 ```
-
 ## Runtime support
 
 TradJS is currently **Bun-first**.
@@ -33,7 +32,6 @@ Some internals are portable and adapter-ready:
 - `measure-fn` instrumentation
 
 Node.js support should be implemented as a runtime adapter, not by scattering Bun/Node conditionals through the framework.
-
 Recommended future shape:
 
 ```txt
@@ -44,7 +42,6 @@ src/runtime/index.ts
 ```
 
 Until that lands, document the full-stack framework as Bun runtime required.
-
 ## Why TradJS?
 
 - file-system routing from `app/`
@@ -53,10 +50,9 @@ Until that lands, document the full-stack framework as Bun runtime required.
 - API route handlers with `GET`, `POST`, etc.
 - plain JSX, no React runtime required
 - page CSS that can be scoped automatically
-- full-body navigation with cleanup and script remounting
+- browser-native document navigation with cross-document View Transitions
 - predictable reconciliation: components re-run by default; `memo()` is opt-in
 - Bun-first CLI, dev server, and build pipeline
-
 ## CLI
 
 ```sh
@@ -84,7 +80,6 @@ npx tradjs build --appdir ./app
 npx tradjs build --css app/globals.css
 npx tradjs build --entry src/a.ts --entry src/b.tsx --outdir ./dist
 ```
-
 ## Project structure
 
 ```txt
@@ -111,7 +106,6 @@ app/
       page.tsx
       error.tsx
 ```
-
 ## Pages
 
 ```tsx
@@ -134,7 +128,6 @@ export default function HomePage() {
 | `app/about/page.tsx` | `/about` |
 | `app/items/[id]/page.tsx` | `/items/:id` |
 | `app/api/data/route.ts` | `/api/data` |
-
 ## Layouts
 
 ```tsx
@@ -158,6 +151,30 @@ export default function RootLayout({ children }: { children: any }) {
 
 Nested route segments can define their own layouts.
 
+### Async server components
+
+SSR stays synchronous by default. A normal `page.tsx` or `layout.tsx` is rendered with `renderToString()` and every component below that synchronous render root must also be synchronous.
+
+Declare the page or layout `async` when its server-rendered tree is allowed to contain async components. TradJS then uses `renderToStringAsync()` for that render root and recursively awaits async descendants.
+
+```tsx
+async function AccountName() {
+  const account = await loadAccount();
+  return <strong>{account.name}</strong>;
+}
+
+export default async function Page() {
+  return (
+    <main>
+      Signed in as <AccountName />
+    </main>
+  );
+}
+```
+
+TradJS does not start with synchronous rendering and then rerun the tree asynchronously when it discovers a Promise. Doing so could execute components, fetches, logging, mutations, or `<Head>` collection twice. If a synchronous page or layout reaches async component output, rendering fails with a focused error telling you to make that page or layout async.
+
+`renderToString()` remains the explicit synchronous low-level API and `renderToStringAsync()` remains the explicit async API. Async SSR currently produces the complete page/shell HTML before the route response is returned; using a `ReadableStream` for the response does not yet make async component rendering progressively streamed.
 ## Client scripts
 
 Add `page.client.tsx` next to a page to mount browser behavior.
@@ -181,7 +198,6 @@ export default function CounterPage() {
 import { render } from 'tradjs/client';
 
 let count = 0;
-
 function Counter() {
   return (
     <button
@@ -202,43 +218,41 @@ function update() {
 
 export default function mount() {
   update();
+}
+```
+The default export is a mount function. TradJS runs it when the document loads. Navigation is browser-native, so TradJS does not retain or call a returned cleanup function when moving to another route. Use normal browser lifecycle primitives such as `pagehide` when explicit teardown or persistence is needed.
 
-  return () => {
-    const root = document.getElementById('counter-root');
-    if (root) render(null, root);
-  };
+Client-rendered components are synchronous. Put browser-side async work in an action/controller function, await it there, update state, then repaint the affected render boundaries. Passing an async component to client `render()` throws a focused error instead of treating the returned Promise as a VNode.
+## Navigation philosophy
+
+TradJS uses **browser-native document navigation**. It does not install a client router, intercept same-origin anchors, fetch the next page in JavaScript, synchronize `<head>`, or replace `<body>` manually.
+
+Use normal links:
+
+```tsx
+<a href="/counter">Counter</a>
+```
+
+For programmatic navigation, use the browser APIs directly:
+
+```ts
+window.location.assign('/counter');
+window.location.replace('/counter');
+```
+
+Each route change is a normal document request. The server renders the destination document, the browser loads it, and that document's `layout.client.tsx` / `page.client.tsx` scripts mount normally. Do not rely on in-memory client state surviving a route change; persist state explicitly when it must survive navigation.
+
+By default, TradJS enables native cross-document View Transitions with:
+
+```css
+@view-transition {
+  navigation: auto;
 }
 ```
 
-The default export is a mount function. If it returns a function, TradJS calls it before the next navigation replaces the page.
+Supporting browsers perform the transition as part of normal document navigation; TradJS does not emulate it with a JavaScript router. Set `viewTransitions: false` on the router if you do not want TradJS to inject the opt-in. Browsers without cross-document View Transition support simply use normal document navigation.
 
-## Navigation philosophy
-
-TradJS navigation is **document-like**, not island-like.
-
-On client navigation, TradJS:
-
-1. fetches the next page HTML
-2. runs current page/layout cleanup functions
-3. syncs `<head>` and root attributes
-4. replaces the entire `<body>`
-5. reactivates scripts in the new body
-6. lets new layout/page scripts mount fresh behavior
-
-This keeps navigation predictable. There is no hidden partial hydration system and no island lifecycle abstraction.
-
-If a small region needs fresh data, use a JSON API route and update that region from your client script.
-
-If something should persist across pages, persist its state explicitly with browser primitives:
-
-- `sessionStorage`
-- `localStorage`
-- IndexedDB
-- URL/search params
-- cookies
-- server session
-
-For smooth visual persistence across full-body transitions, use the Browser View Transition API with stable `view-transition-name` values.
+Use stable `view-transition-name` values when elements in the old and new documents should participate in the same transition:
 
 ```css
 .player-shell {
@@ -261,7 +275,7 @@ export default function Layout({ children }: { children: any }) {
 }
 ```
 
-State still belongs in explicit storage:
+If state must survive navigation, persist it explicitly with browser or server storage such as `sessionStorage`, `localStorage`, IndexedDB, URL/search params, cookies, or a server session. Save important client state when it changes or from a browser lifecycle event such as `pagehide`; do not depend on a TradJS route-cleanup callback.
 
 ```ts
 // layout.client.tsx
@@ -273,17 +287,17 @@ export default function mount() {
   if (!root) return;
 
   const state = JSON.parse(sessionStorage.getItem(key) || '{"playing":false}');
-
   root.textContent = state.playing ? 'Playing' : 'Paused';
 
-  return () => {
-    sessionStorage.setItem(key, JSON.stringify(state));
-  };
+  window.addEventListener(
+    'pagehide',
+    () => sessionStorage.setItem(key, JSON.stringify(state)),
+    { once: true },
+  );
 }
 ```
 
-This is the intended model: full page replacement, explicit persistence when needed.
-
+This is the intended model: native document navigation, optional native View Transitions, and explicit persistence when needed.
 ## JSX runtime
 
 ```json
@@ -306,13 +320,11 @@ Use React-style event props:
 <input onInput={(event) => console.log(event.currentTarget.value)} />
 <form onSubmit={(event) => event.preventDefault()} />
 ```
-
 Server rendering skips event props, so handlers do not become HTML attributes.
-
 ## Client renderer
 
 ```tsx
-import { render, h, memo, Link, navigate } from 'tradjs/client';
+import { render, h, memo } from 'tradjs/client';
 
 render(<App />, document.getElementById('root')!);
 render(null, root);
@@ -323,7 +335,6 @@ Use `h()` manually if preferred:
 ```tsx
 render(h('button', { onClick: () => alert('hi') }, 'Click'), root);
 ```
-
 ## Re-rendering and `memo()`
 
 Function components re-run by default whenever you call `render()`.
@@ -342,8 +353,110 @@ render(<App />, root);
 mode = 'tab';
 render(<App />, root);
 ```
-
 TradJS executes `App` again, produces a new vnode tree, and reconciles it against the previous tree. DOM nodes are reused where possible and replaced only when needed.
+
+Function components may return `null`, become non-empty again later, or change their rendered root type. Application code does not need a permanent wrapper such as `display: contents` to make `element -> null -> element` work. Component and fragment fibers are logical fibers; their output is reconciled against the actual host parent and keeps its logical sibling position.
+
+For applications with multiple independently changing regions, treat each container passed to `render()` as an explicit subtree boundary. Keep state changes and the repaint decision together in controller/action methods, and repaint only the boundaries affected by that transition.
+
+A useful application-level boundary helper is just a ref plus a measured `paint()` function; it does not need to be a TradJS framework API:
+
+```tsx
+import { createMeasure } from "measure-fn";
+import { render } from "tradjs/client";
+
+const m = createMeasure("pool");
+
+type Boundary<T extends HTMLElement> = {
+  ref: { current: T | null };
+  paint: (view: any) => void;
+};
+
+function createBoundary<T extends HTMLElement>(name: string): Boundary<T> {
+  const ref = { current: null as T | null };
+  return {
+    ref,
+    paint(view) {
+      return m.sync(`render:${name}`, () => {
+        if (ref.current) render(view, ref.current);
+      });
+    },
+  };
+}
+
+const gravity = createBoundary<HTMLSpanElement>("gravity");
+const wallet = createBoundary<HTMLSpanElement>("wallet");
+const stats = createBoundary<HTMLSpanElement>("stats");
+
+const pool = {
+  token: { symbol: "GRAV", gravity: 0 },
+  wallet: { address: null as string | null },
+  updates: 0,
+
+  updateGravity(delta: number) {
+    return m.sync("pool:updateGravity", () => {
+      this.token.gravity += delta;
+      this.updates++;
+      gravity.paint(<Gravity />);
+      stats.paint(<Stats />);
+    });
+  },
+
+  toggleWallet() {
+    return m.sync("pool:toggleWallet", () => {
+      this.wallet.address = this.wallet.address ? null : "7F3A…91C2";
+      this.updates++;
+      wallet.paint(<Wallet />);
+      stats.paint(<Stats />);
+    });
+  },
+};
+
+function Gravity() {
+  return <strong>{pool.token.gravity}</strong>;
+}
+
+function Wallet() {
+  return <strong>{pool.wallet.address ?? "Disconnected"}</strong>;
+}
+
+function Stats() {
+  return <small>{pool.updates} updates</small>;
+}
+
+function App() {
+  return (
+    <main>
+      <h1>{pool.token.symbol} Pool</h1>
+      <p>
+        Gravity: <span ref={gravity.ref} />
+      </p>
+      <p>
+        Wallet: <span ref={wallet.ref} />
+      </p>
+      <p>
+        Stats: <span ref={stats.ref} />
+      </p>
+      <button onClick={() => pool.updateGravity(-1)}>-1</button>
+      <button onClick={() => pool.updateGravity(1)}>+1</button>
+      <button onClick={() => pool.toggleWallet()}>Toggle wallet</button>
+    </main>
+  );
+}
+
+export default function mount() {
+  const root = document.getElementById("pool-root");
+  if (!root) return;
+  return m.sync("mount", () => {
+    render(<App />, root);
+    gravity.paint(<Gravity />);
+    wallet.paint(<Wallet />);
+    stats.paint(<Stats />);
+  });
+}
+```
+
+The controller owns the state transition and the repaint decision. Event handlers call the controller instead of duplicating `state mutation + render()` logic. Perform all mutations for one logical action first, then paint each dependent boundary once. If several regions always repaint together, use one common boundary instead of splitting them artificially.
 
 Use `memo()` only for explicit props-based bailout:
 
@@ -354,28 +467,16 @@ const Card = memo(function Card({ title }: { title: string }) {
 ```
 
 This matches the React mental model: no implicit function-component memoization.
-
 ## Links
 
+TradJS uses normal browser links; there is no framework `Link` component or `navigate()` helper.
+
 ```tsx
-import { Link, navigate } from 'tradjs/client';
-
-<Link href="/counter">Counter</Link>
-
-navigate('/counter');
-navigate('/counter', { replace: true, scroll: false });
+<a href="/counter">Counter</a>
+<a href="/docs#routing">Routing docs</a>
 ```
 
-Normal anchors are intercepted when safe:
-
-- same origin
-- no `target`
-- no `download`
-- no modifier key
-- not marked with `data-no-intercept`
-
-External links and special clicks use the browser default behavior.
-
+For programmatic document navigation, use `window.location.assign()` or `window.location.replace()`. Native navigation also means standard browser behavior for `target`, `download`, modifier-clicks, history, reloads, and external URLs remains untouched.
 ## API routes
 
 ```ts
@@ -400,7 +501,6 @@ export function PUT(req: Request) {}
 export function PATCH(req: Request) {}
 export function DELETE(req: Request) {}
 ```
-
 ## Middleware
 
 ```ts
@@ -417,6 +517,24 @@ export default async function middleware(req: Request): Promise<Response | void>
 
 Return `void` to continue. Return a `Response` to short-circuit.
 
+### CORS
+
+TradJS also exports a handler-level `cors()` middleware from `tradjs/web`. Wrap the app router when the server should answer cross-origin browser requests and preflights centrally instead of adding CORS headers inside individual routes.
+
+```ts
+import { cors, createAppRouter, serve } from 'tradjs/web';
+
+const app = cors(createAppRouter(), {
+  origin: ['https://app.example.com'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  maxAge: 600,
+});
+
+await serve(app);
+```
+
+`cors()` handles `OPTIONS` preflight requests and applies the corresponding CORS headers to normal responses. `origin` may be `"*"`, a single origin, an allowlist, or a resolver function. CORS is a browser access policy, not authentication or authorization; keep authorization in route middleware and handlers.
 ## Error boundaries
 
 ```tsx
@@ -438,6 +556,11 @@ export default function ErrorBoundary({
   );
 }
 ```
+
+Server-rendering errors and client-bundle build errors go through the route error path instead of being logged and followed by a successful empty page. If `page.client.tsx` or `layout.client.tsx` fails to bundle, the request fails rather than returning HTTP 200 with an empty client mount. In development, the built-in fallback error page includes the escaped error details; production fallback output hides implementation details. A route `error.tsx` remains the preferred custom error UI.
+
+After a client bundle has successfully loaded, TradJS also surfaces browser module-import failures, rejected async mount functions, uncaught errors, and unhandled promise rejections in an in-page error overlay. Build failures cannot use that browser overlay because no working client bundle exists yet, so those failures are handled by the server response.
+Client builds allow bare `buffer` imports to resolve through Bun's browser implementation, including imports inside browser SDKs such as `@solana/web3.js`. This does not install a global `Buffer`; application code should import `{ Buffer }` from `"buffer"` when needed. Explicit `node:` imports (including `node:buffer`), other Node builtins such as `fs`, Bun modules such as `bun:sqlite`, and packages marked as server-only remain rejected, including transitive imports.
 
 ## Head tags
 
@@ -475,7 +598,6 @@ export const ssg = {
   revalidate: 60,
 };
 ```
-
 ## Scoped CSS
 
 ```txt
@@ -510,7 +632,6 @@ export default function Nav() {
   return <nav className={styles.nav}>Nav</nav>;
 }
 ```
-
 ## Streaming responses
 
 ```ts
@@ -528,7 +649,6 @@ export function GET(req: Request) {
   });
 }
 ```
-
 ## Observability
 
 TradJS uses scoped `measure-fn` internally.
@@ -551,7 +671,6 @@ export function GET(req: Request) {
 No measurement function is passed into route handlers.
 
 ## Public API
-
 ### `tradjs/client`
 
 ```ts
@@ -560,8 +679,6 @@ import {
   createElement,
   h,
   memo,
-  Link,
-  navigate,
   Fragment,
 } from 'tradjs/client';
 ```
@@ -573,6 +690,8 @@ import {
   Head,
   serve,
   start,
+  createAppRouter,
+  cors,
 } from 'tradjs/web';
 ```
 
@@ -584,7 +703,6 @@ import {
   renderToStringAsync,
 } from 'tradjs/server';
 ```
-
 ## Design notes
 
 TradJS intentionally keeps the model small:
@@ -592,7 +710,7 @@ TradJS intentionally keeps the model small:
 - server pages return JSX
 - API routes return `Response`
 - client interactivity is explicit through scripts
-- navigation replaces the full body
+- navigation uses the browser document lifecycle
 - persistence is explicit through browser/server storage
 - memoization is explicit through `memo()`
 - routing comes from files

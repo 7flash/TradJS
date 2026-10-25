@@ -1,11 +1,3 @@
-/**
- * Server module barrel export.
- *
- * Re-exports everything from the server sub-modules so that
- * `src/web.ts` remains a thin compatibility shim.
- */
-
-// Types
 export type {
   Handler,
   HandlerResponse,
@@ -15,14 +7,11 @@ export type {
   RenderPageOptions,
   AppRouterOptions,
 } from "./types";
-
-// Import maps
 export { imports } from "./imports";
-
-// Build pipeline
 export {
   buildScript,
   buildStyle,
+  buildScopedStyle,
   buildAsset,
   buildClientScript,
   buildCSSModule,
@@ -32,13 +21,8 @@ export {
   builtAssets,
   buildCache,
 } from "./build";
-
 export type { CSSModuleResult } from "./build";
-
-// HTTP server
 export { serve as serveHttp, findAvailablePort } from "./serve";
-
-// App router & page rendering
 export {
   createAppRouter,
   resolveAppDir,
@@ -48,24 +32,18 @@ export {
   serve,
   start,
 } from "./app-router";
-
-// Router (file-based route discovery)
 export { discoverRoutes, matchRoute } from "./router";
-
-// SSR
 export { renderToString, renderToStringAsync } from "./ssr";
-
-// Head component (declarative <head> management)
 export { Head, collectHead, collectHeadAsync } from "./head";
 export type { HeadCollection } from "./head";
-
-// SSG (Static Site Generation)
 export {
   prerender,
+  createSSGCache,
   getPrerendered,
   setPrerendered,
   clearSSGCache,
 } from "./ssg";
-
-// CLI Build (build-to-disk)
 export { buildToDisk, parseBuildArgs } from "./cli-build";
+export type { SSGCache, SSGConfig } from "./ssg";
+export type { ServeAppOptions } from "./app-router";
+export type { HttpServeOptions } from "./serve";

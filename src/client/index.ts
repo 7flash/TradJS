@@ -1,33 +1,18 @@
-/**
- * tradjs/client — Public API
- *
- * This barrel re-exports from separated modules:
- *
- *   types.ts       — VNode, Props, Child, Component, Fragment, JSX namespace
- *   render.ts      — Client-side VDOM renderer with pluggable reconciler (browser-only)
- *   reconcilers/   — Replaceable diffing strategies (keyed, sequential, custom)
- *
- * SSR (renderToString) lives at src/ssr.ts — NOT here. The client directory
- * is bundled for the browser, and SSR code must never appear in client bundles.
- *
- * Server code (src/web.ts) imports renderToString from 'tradjs/ssr' or '../ssr'.
- * Client code (page.client.tsx) imports { render } from 'tradjs/client'.
- * Page navigation is browser-native; this package does not install a client router.
- */
-
-// Types + Fragment symbol
 export { Fragment } from "./types";
-export type { VNode, Props, Child, Component, JSX } from "./types";
-
-// VNode creation (shared by both client and server)
+export type {
+  VNode,
+  Props,
+  Child,
+  Component,
+  AsyncComponent,
+  JSX,
+} from "./types";
 export { createElement, jsx, jsxs, jsxDEV } from "./render";
 export { createElement as h } from "./render";
-
-// Client-side renderer
 export { render, memo, setReconciler, getReconciler } from "./render";
 export type { Fiber, RenderOptions } from "./render";
-
-// Reconciler strategies (for advanced usage)
+export { createBoundary } from "./boundary";
+export type { Boundary } from "./boundary";
 export { sequentialReconciler } from "./reconcilers/sequential";
 export { keyedReconciler } from "./reconcilers/keyed";
 export { replaceReconciler } from "./reconcilers/replace";

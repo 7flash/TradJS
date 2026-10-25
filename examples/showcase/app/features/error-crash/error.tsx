@@ -1,19 +1,15 @@
-/**
- * Error boundary for /features/error-crash.
- * Catches the intentional throw and renders a user-friendly error page.
- *
- * Props: { error: { message: string, stack?: string }, pathname: string }
- */
 export default function ErrorBoundary({
   error,
   pathname,
 }: {
-  error: { message: string; stack?: string };
+  error: {
+    message: string;
+    stack?: string;
+  };
   pathname: string;
 }) {
   const errorMessage =
     typeof error === "string" ? error : error?.message || "Unknown error";
-
   return (
     <div className="page">
       <div
@@ -101,7 +97,7 @@ export default function ErrorBoundary({
             <code>page.tsx</code> threw:{" "}
             <code>throw new Error('Intentional crash!')</code>
           </li>
-          <li>Melina caught the error in the SSR try/catch</li>
+          <li>TradJS caught the error in the SSR try/catch</li>
           <li>
             Found <code>error.tsx</code> in this directory (walk-up discovery)
           </li>

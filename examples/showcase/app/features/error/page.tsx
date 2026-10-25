@@ -1,6 +1,3 @@
-/**
- * Error Boundary info page — explains the feature, links to crash demo
- */
 export default function ErrorDemoPage() {
   return (
     <div className="page">
@@ -44,7 +41,7 @@ export default function ErrorDemoPage() {
 └── error.tsx       ← Error boundary (renders on crash)
 
 # How discovery works:
-# When page.tsx throws, Melina walks UP the directory tree
+# When page.tsx throws, TradJS walks UP the directory tree
 # looking for the nearest error.tsx file.
 # 
 # It checks:  features/error-crash/error.tsx  ← found! use this

@@ -1,19 +1,25 @@
-/**
- * TradJS server-side renderer.
- *
- * Sync and async rendering deliberately share the same element/attribute
- * serialization helpers so escaping and markup semantics cannot drift.
- */
-
 import {
   Fragment,
   type VNode,
   type Child,
   type Component,
-  type Props,
+  type AsyncComponent,
 } from "../client/types";
 import { Head } from "./head";
-import { escapeHtml, htmlAttributeName, isSafeHtmlName } from "./html";
+
+const ESCAPE_MAP: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+
+const ESCAPE_RE = /[&<>"']/g;
+
+function escapeHtml(str: string): string {
+  return str.replace(ESCAPE_RE, (ch) => ESCAPE_MAP[ch]);
+}
 
 const VOID_ELEMENTS = new Set([
   "meta",
@@ -32,64 +38,45 @@ const VOID_ELEMENTS = new Set([
   "wbr",
 ]);
 
-function styleObjectToString(style: Record<string, unknown>): string {
-  return Object.entries(style)
-    .filter(
-      ([, value]) => value !== undefined && value !== null && value !== false,
-    )
-    .map(([key, value]) => {
-      const cssName = key.startsWith("--")
-        ? key
-        : key.replace(/([A-Z])/g, "-$1").toLowerCase();
-      return `${cssName}:${String(value)}`;
-    })
-    .join(";");
+function isPromiseLike<T = unknown>(value: unknown): value is PromiseLike<T> {
+  return (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as any).then === "function"
+  );
 }
 
-function renderAttributes(props: Props): string {
+function renderAttributes(propsObj: Record<string, any>): string {
   let html = "";
-
-  for (const [key, value] of Object.entries(props)) {
+  for (const [key, value] of Object.entries(propsObj)) {
     if (
       key === "children" ||
       key === "key" ||
       key === "ref" ||
-      key === "dangerouslySetInnerHTML" ||
-      key.startsWith("on") ||
-      value === undefined ||
-      value === null ||
-      value === false ||
-      !isSafeHtmlName(key)
+      key.startsWith("on")
     ) {
       continue;
     }
-
-    const attributeName = htmlAttributeName(key);
-
-    if (key === "style" && typeof value === "object") {
-      const style = styleObjectToString(value as Record<string, unknown>);
-      if (style) html += ` style="${escapeHtml(style)}"`;
+    if (value === undefined || value === null || value === false) continue;
+    if (key === "className" || key === "class") {
+      html += ` class="${escapeHtml(String(value))}"`;
       continue;
     }
-
+    if (key === "style" && typeof value === "object") {
+      const styleStr = Object.entries(value)
+        .map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}:${v}`)
+        .join(";");
+      html += ` style="${escapeHtml(styleStr)}"`;
+      continue;
+    }
+    if (key === "dangerouslySetInnerHTML") continue;
     if (value === true) {
-      html += ` ${attributeName}`;
+      html += ` ${key}`;
     } else {
-      html += ` ${attributeName}="${escapeHtml(value)}"`;
+      html += ` ${key}="${escapeHtml(String(value))}"`;
     }
   }
-
   return html;
-}
-
-function renderOpenTag(tagName: string, props: Props): string {
-  return `<${tagName}${renderAttributes(props)}>`;
-}
-
-function rawInnerHtml(props: Props): string | null {
-  const raw = props.dangerouslySetInnerHTML;
-  if (!raw || typeof raw !== "object" || !("__html" in raw)) return null;
-  return String((raw as { __html?: unknown }).__html ?? "");
 }
 
 export function renderToString(vnode: VNode | Child): string {
@@ -101,46 +88,55 @@ export function renderToString(vnode: VNode | Child): string {
   ) {
     return "";
   }
-  if (typeof vnode === "string" || typeof vnode === "number") {
-    return escapeHtml(vnode);
-  }
+  if (typeof vnode === "string") return escapeHtml(vnode);
+  if (typeof vnode === "number") return String(vnode);
   if (Array.isArray(vnode)) {
     return vnode.map((child) => renderToString(child)).join("");
   }
 
   const { type, props } = vnode as VNode;
-
   if (type === Fragment) return renderChildrenToString(props?.children);
 
   if (typeof type === "function") {
     if (type === Head) {
-      Head(props || {});
+      (type as any)(props || {});
       return "";
     }
-
     const result = (type as Component)(props || {});
-    if (result instanceof Promise) {
-      throw new Error(
-        "renderToString() does not support async components; use renderToStringAsync() instead.",
-      );
+    if (isPromiseLike(result)) {
+      const componentName = (type as Function).name || "AnonymousComponent";
+      const error = new Error(
+        `renderToString() encountered async component "${componentName}". Use renderToStringAsync() or opt the route into async SSR.`,
+      ) as Error & { code?: string; componentName?: string };
+      error.code = "TRADJS_ASYNC_COMPONENT_IN_SYNC_RENDER";
+      error.componentName = componentName;
+      throw error;
     }
     return renderToString(result);
   }
 
   const tagName = type as string;
   const propsObj = props || {};
-  let html = renderOpenTag(tagName, propsObj);
+  let html = `<${tagName}${renderAttributes(propsObj)}>`;
+
   if (VOID_ELEMENTS.has(tagName)) return html;
 
-  const raw = rawInnerHtml(propsObj);
-  html += raw ?? renderChildrenToString(propsObj.children);
+  if (propsObj.dangerouslySetInnerHTML) {
+    html += propsObj.dangerouslySetInnerHTML.__html;
+  } else {
+    html += renderChildrenToString(propsObj.children);
+  }
+
   html += `</${tagName}>`;
   return html;
 }
 
 export async function renderToStringAsync(
-  vnode: VNode | Child | Promise<VNode | Child>,
+  vnode: VNode | Child | PromiseLike<VNode | Child>,
 ): Promise<string> {
+  if (isPromiseLike<VNode | Child>(vnode)) {
+    return renderToStringAsync(await vnode);
+  }
   if (
     vnode === null ||
     vnode === undefined ||
@@ -149,39 +145,40 @@ export async function renderToStringAsync(
   ) {
     return "";
   }
-  if (typeof vnode === "string" || typeof vnode === "number") {
-    return escapeHtml(vnode);
-  }
+  if (typeof vnode === "string") return escapeHtml(vnode);
+  if (typeof vnode === "number") return String(vnode);
   if (Array.isArray(vnode)) {
     let html = "";
-    for (const child of vnode) html += await renderToStringAsync(child);
+    for (const child of vnode) {
+      html += await renderToStringAsync(child);
+    }
     return html;
-  }
-  if (vnode instanceof Promise) {
-    return renderToStringAsync(await vnode);
   }
 
   const { type, props } = vnode as VNode;
-
   if (type === Fragment) return renderChildrenAsync(props?.children);
 
   if (typeof type === "function") {
     if (type === Head) {
-      Head(props || {});
+      (type as any)(props || {});
       return "";
     }
-
-    const result = (type as Component)(props || {});
+    const result = (type as Component<any> | AsyncComponent<any>)(props || {});
     return renderToStringAsync(result);
   }
 
   const tagName = type as string;
   const propsObj = props || {};
-  let html = renderOpenTag(tagName, propsObj);
+  let html = `<${tagName}${renderAttributes(propsObj)}>`;
+
   if (VOID_ELEMENTS.has(tagName)) return html;
 
-  const raw = rawInnerHtml(propsObj);
-  html += raw ?? (await renderChildrenAsync(propsObj.children));
+  if (propsObj.dangerouslySetInnerHTML) {
+    html += propsObj.dangerouslySetInnerHTML.__html;
+  } else {
+    html += await renderChildrenAsync(propsObj.children);
+  }
+
   html += `</${tagName}>`;
   return html;
 }
@@ -200,7 +197,9 @@ async function renderChildrenAsync(
   if (children === undefined || children === null) return "";
   if (Array.isArray(children)) {
     let html = "";
-    for (const child of children) html += await renderToStringAsync(child);
+    for (const child of children) {
+      html += await renderToStringAsync(child);
+    }
     return html;
   }
   return renderToStringAsync(children);

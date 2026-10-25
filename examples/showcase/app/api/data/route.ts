@@ -1,7 +1,6 @@
-// REST API endpoint
 export function GET(req: Request) {
   return Response.json({
-    message: "Hello from the Melina.js API!",
+    message: "Hello from the TradJS API!",
     timestamp: new Date().toISOString(),
     routes: [
       { method: "GET", path: "/api/data", description: "This endpoint" },
@@ -13,7 +12,6 @@ export function GET(req: Request) {
     ],
   });
 }
-
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   return Response.json({

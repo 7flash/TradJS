@@ -1,91 +1,47 @@
+import { sections } from "../navigation";
 export default function HomePage() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1 className="page-title">Welcome to Melina.js</h1>
+        <h1 className="page-title">TradJS, in practice</h1>
         <p className="page-description">
-          A Bun-native web framework with file-based routing, server-side
-          rendering, and a lightweight client VDOM runtime. Each page below
-          demonstrates a specific feature.
+          Server-rendered pages, native browser navigation, and small
+          interactive views. Explore each part of the framework below.
         </p>
       </div>
-
-      <div className="feature-grid">
-        <a href="/ssr" className="feature-card">
-          <div className="feature-card-icon">🖥️</div>
-          <h3 className="feature-card-title">Server-Side Rendering</h3>
-          <p className="feature-card-desc">
-            Pages render on the server with full access to the runtime, file
-            system, and environment.
-          </p>
-        </a>
-
-        <a href="/counter" className="feature-card">
-          <div className="feature-card-icon">🔢</div>
-          <h3 className="feature-card-title">Client Interactivity</h3>
-          <p className="feature-card-desc">
-            Vanilla counter using render() — no framework, just VDOM diffing and
-            DOM patches.
-          </p>
-        </a>
-
-        <a href="/xstate" className="feature-card">
-          <div className="feature-card-icon">🚦</div>
-          <h3 className="feature-card-title">XState Integration</h3>
-          <p className="feature-card-desc">
-            Finite state machines driving UI updates — traffic light FSM and
-            actor-based counter.
-          </p>
-        </a>
-
-        <a href="/reconciler" className="feature-card">
-          <div className="feature-card-icon">⚙️</div>
-          <h3 className="feature-card-title">Reconciler Strategies</h3>
-          <p className="feature-card-desc">
-            Benchmark keyed vs sequential vs auto diffing — see where each
-            strategy wins.
-          </p>
-        </a>
-
-        <a href="/items/alpha" className="feature-card">
-          <div className="feature-card-icon">🔗</div>
-          <h3 className="feature-card-title">Dynamic Routes</h3>
-          <p className="feature-card-desc">
-            File-based [id] parameter routing with server-side data access.
-          </p>
-        </a>
-
-        <a href="/streaming" className="feature-card">
-          <div className="feature-card-icon">📡</div>
-          <h3 className="feature-card-title">SSE Streaming</h3>
-          <p className="feature-card-desc">
-            Server-Sent Events with live DOM updates via EventSource.
-          </p>
-        </a>
-
-        <a href="/stress" className="feature-card">
-          <div className="feature-card-icon">🔥</div>
-          <h3 className="feature-card-title">Backend Stress Test</h3>
-          <p className="feature-card-desc">
-            Hammer the server with burst, sequential, and ramp-up requests to
-            test throughput.
-          </p>
-        </a>
-      </div>
-
-      <div className="demo-card" style={{ marginTop: "32px" }}>
-        <h3 className="demo-card-title">Architecture</h3>
+      <div className="demo-card">
+        <h2 className="demo-card-title">One document per page</h2>
         <p className="demo-card-description">
-          TradJS is server-first. Pages render as HTML, normal links perform
-          native document navigation, and cross-document View Transitions are
-          enabled by default. Client mount scripts add interactivity only to the
-          current document.
+          Every link loads a real page. TradJS enables native cross-document
+          view transitions automatically; the shared sidebar stays visually
+          steady while the page content changes in supporting browsers.
         </p>
-        <div className="code-block">{`Server:     page.tsx        → renderToString() → HTML document
-Navigation: <a href="...">  → browser navigation → cross-document transition
-Client:     page.client.tsx → mount() → render(vnode, el)
-Lifetime:   browser owns document/module lifetime, history, and BFCache`}</div>
+        <p className="demo-card-description">
+          Interactive views use ordinary state and explicit render calls.
+          Controllers change state; JSX describes the result. Try the counter,
+          then the subtree rendering example.
+        </p>
       </div>
+      {sections.map((section) => (
+        <section
+          key={section.title}
+          className="overview-section"
+          aria-label={section.title}
+        >
+          <h2>{section.title}</h2>
+          <div className="feature-grid">
+            {section.items.map((item) => (
+              <a key={item.href} href={item.href} className="feature-card">
+                <h3 className="feature-card-title">{item.label}</h3>
+                <p className="feature-card-desc">{item.description}</p>
+                <span className="feature-card-action" aria-hidden="true">
+                  Open example →
+                </span>
+              </a>
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }

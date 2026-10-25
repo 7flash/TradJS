@@ -58,7 +58,7 @@ export default function XStatePage() {
       </div>
 
       <div className="demo-card">
-        <h3 className="demo-card-title">📝 XState + Melina Pattern</h3>
+        <h3 className="demo-card-title">📝 XState + TradJS Pattern</h3>
         <div className="code-block">{`import { render } from 'tradjs/client';
 import { createMachine, createActor, assign } from 'xstate';
 

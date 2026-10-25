@@ -1,10 +1,9 @@
 import { Head } from "tradjs/web";
-
 export default function HeadDemoPage() {
   return (
     <div className="page">
       <Head>
-        <title>Head Demo — Custom Page Title | Melina.js</title>
+        <title>Head Demo — Custom Page Title | TradJS</title>
         <meta
           name="description"
           content="This page demonstrates the Head component for declarative head tag management."
@@ -39,7 +38,7 @@ export default function HeadDemoPage() {
         >
           <li>
             <strong>Custom title</strong> — "Head Demo — Custom Page Title |
-            Melina.js" (check the browser tab)
+            TradJS" (check the browser tab)
           </li>
           <li>
             <strong>Meta description</strong> — SEO-friendly page description
@@ -59,7 +58,7 @@ export default function HeadDemoPage() {
         <h3 className="demo-card-title">💡 Why use {"<Head>"}?</h3>
         <div className="code-block">
           {`// ❌ Without <Head> — every page has the same title
-// layout.tsx sets <title>Melina.js Showcase</title>
+// layout.tsx sets <title>TradJS Showcase</title>
 // and you can't change it from a page
 
 // ✅ With <Head> — each page controls its own head tags

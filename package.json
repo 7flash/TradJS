@@ -1,21 +1,16 @@
 {
   "name": "tradjs",
-  "version": "4.3.0",
-  "description": "A Next.js-inspired Bun framework with file-based routing, server-rendered JSX, and a flexible client runtime.",
+  "version": "4.4.0",
+  "description": "A Bun framework for server-rendered pages, native navigation, and explicit JSX rendering.",
   "module": "./src/web.ts",
   "main": "./src/web.ts",
   "bin": {
-    "tradjs": "./bin/melina.ts",
-    "fastjs": "./bin/melina.ts",
-    "lastjs": "./bin/melina.ts",
-    "melina": "./bin/melina.ts"
+    "tradjs": "./bin/tradjs.ts"
   },
   "files": [
     "src",
     "bin",
-    "docs",
     "README.md",
-    "SKILL.md",
     "dist"
   ],
   "exports": {
@@ -80,15 +75,9 @@
       "default": "./src/client/jsx-dom.ts"
     }
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/7flash/melina.js"
-  },
   "author": {
     "name": "TradJS Contributors"
   },
-  "bugs": "https://github.com/7flash/melina.js/issues",
-  "homepage": "https://github.com/7flash/melina.js#readme",
   "license": "MIT",
   "keywords": [
     "bun",
@@ -106,16 +95,16 @@
   "private": false,
   "sideEffects": false,
   "devDependencies": {
+    "@solana/web3.js": "1.98.4",
     "@types/bun": "latest",
     "@types/jsdom": "^28.0.0",
     "jsdom": "^28.1.0",
-    "tradjs": "link:.",
     "typescript": "^5.8.3"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.10",
     "autoprefixer": "^10.4.21",
-    "measure-fn": "4.0.5",
+    "measure-fn": "^5.3.0",
     "postcss": "^8.5.6",
     "ts-dedent": "^2.2.0"
   },
