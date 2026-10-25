@@ -13,6 +13,7 @@ import type {
 import { sequentialReconciler } from "./reconcilers/sequential";
 import { keyedReconciler } from "./reconcilers/keyed";
 import { replaceReconciler } from "./reconcilers/replace";
+import { isFormStateProp, setDomProp } from "./props";
 import {
   attachBoundary,
   detachBoundary,
@@ -287,6 +288,8 @@ function patchProps(
         el.removeEventListener(event, oldListener);
         fiber.listeners.delete(event);
       }
+    } else if (isFormStateProp(el, key)) {
+      setDomProp(el, key, null);
     } else if (key === "className" || key === "class") {
       setElementClass(el, "");
     } else if (key === "style") {
@@ -298,6 +301,7 @@ function patchProps(
 
   for (const [key, value] of Object.entries(safeNewProps)) {
     if (key === "children" || key === "key" || key === "ref") continue;
+    if (isFormStateProp(el, key)) continue;
     if (safeOldProps[key] === value) continue;
     if (key === "className" || key === "class") {
       setElementClass(el, value);
@@ -432,6 +436,7 @@ function patchFiber(
       patchProps(el, oldVNode.props, newVNode.props, oldFiber);
       const newChildVNodes = normalizeChildren(newVNode.props.children);
       diffChildren(oldFiber, el, oldFiber.children, newChildVNodes);
+      syncFormState(el, newVNode.props);
       oldFiber.vnode = newVNode;
       bindRef(
         newVNode.props.ref,
@@ -512,6 +517,7 @@ function mountVNode(
     const childFiber = mountVNode(child, fiber, el);
     if (childFiber) fiber.children.push(childFiber);
   }
+  syncFormState(el, props);
   if (parentNode) parentNode.appendChild(el);
   bindRef(props.ref, el, fiber, vnodeOwners.get(vnode) ?? null);
 
@@ -543,10 +549,19 @@ function cleanupFiber(fiber: Fiber): void {
   fiber.children = [];
 }
 
+// Reapply controlled state even when vnode props are unchanged: user input can
+// change live properties independently. Select values require mounted options.
+function syncFormState(el: Element, props: Props): void {
+  for (const [key, value] of Object.entries(props || {})) {
+    if (isFormStateProp(el, key)) setDomProp(el, key, value);
+  }
+}
+
 function applyProps(el: Element, props: Props, fiber: Fiber): void {
   if (!props) return;
   for (const [key, value] of Object.entries(props)) {
     if (key === "children" || key === "key" || key === "ref") continue;
+    if (isFormStateProp(el, key)) continue;
     if (key === "className" || key === "class") {
       setElementClass(el, value);
     } else if (key === "style" && typeof value === "object") {

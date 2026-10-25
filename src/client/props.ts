@@ -20,6 +20,13 @@ export function rawHtml(props: Record<string, unknown>): string | null {
     ? String(raw.__html ?? "")
     : null;
 }
+export function isFormStateProp(el: Element, key: string): boolean {
+  return (
+    (key === "value" && ["input", "textarea", "select"].includes(el.localName)) ||
+    (key === "checked" && el.localName === "input") ||
+    (key === "selected" && el.localName === "option")
+  );
+}
 export function setDomProp(el: Element, key: string, value: unknown): void {
   if (!isSafeHtmlName(key)) return;
   if (key === "className" || key === "class") {
