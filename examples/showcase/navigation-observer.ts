@@ -28,7 +28,8 @@ export function observeNavigation(): void {
           message: String(error?.message || error).slice(0, 400),
         }),
     );
-    transition.finished.then(() => record("finished"));
+    const onFinished = (): void => record("finished");
+    transition.finished.then(onFinished, onFinished);
   }
   function onPageSwap(event: PageSwapEvent): void {
     record("pageswap", {

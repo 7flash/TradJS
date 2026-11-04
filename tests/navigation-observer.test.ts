@@ -222,6 +222,33 @@ describe("showcase early navigation observation", () => {
       dom.window.close();
     }
   });
+  test("handles a browser-skipped transition that rejects both ready and finished", async () => {
+    const { dom, marks, dispatch } = prepareObserver();
+    const skipped = new dom.window.DOMException(
+      "Skipping view transition because skipTransition() was called.",
+      "AbortError",
+    );
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      dispatch("pagereveal", {
+        ready: Promise.reject(skipped),
+        finished: Promise.reject(skipped),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+      expect(marks.map((mark) => mark.name)).toEqual([
+        "tradjs:navigation:pagereveal",
+        "tradjs:navigation:skipped",
+        "tradjs:navigation:finished",
+      ]);
+      expect(marks[1]!.detail.errorName).toBe("AbortError");
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      dom.window.close();
+    }
+  });
   test("reports no transition accurately and keeps working after a BFCache-style reveal", async () => {
     const { dom, marks, dispatch, before } = prepareObserver();
     try {

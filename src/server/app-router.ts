@@ -113,7 +113,7 @@ async function wrapWithLayouts(tree: any, layoutPaths: string[]) {
   return { tree: wrappedTree, hasAsyncLayout };
 }
 
-function createClientBootstrap(
+export function createClientBootstrap(
   scripts: { url: string; type: "layout" | "page" }[],
   params: Record<string, any>,
 ): string {
@@ -153,7 +153,11 @@ const __tradjsShowClientError=(error,label='Client error')=>{
   if(detail)detail.textContent=__tradjsDev?__tradjsDescribeError(error):'The client failed to start. Check the server and browser logs.';
 };
 window.addEventListener('error',(event)=>__tradjsShowClientError(event.error||event.message,'Unhandled client error'));
-window.addEventListener('unhandledrejection',(event)=>__tradjsShowClientError(event.reason,'Unhandled promise rejection'));
+const __tradjsIsSkippedTransition=(error)=>error?.name==='AbortError'&&/transition/i.test(error?.message||'');
+window.addEventListener('unhandledrejection',(event)=>{
+  if(__tradjsIsSkippedTransition(event.reason)){event.preventDefault();return}
+  __tradjsShowClientError(event.reason,'Unhandled promise rejection');
+});
 for(const entry of __tradjsScripts){
   import(entry.url)
     .then(async(m)=>{if(typeof m.default==='function')await m.default({params:__tradjsParams})})
