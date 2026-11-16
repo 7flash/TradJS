@@ -95,27 +95,50 @@ export default function mount() {
   const events: StreamEvent[] = [];
   const MAX_EVENTS = 50;
 
-  const es = new EventSource("/api/stream");
+  let es: EventSource | null = null;
 
-  es.onopen = () => {
-    render(<Status connected={true} count={0} />, statusRoot);
-  };
+  function connect() {
+    if (es) return;
+    const connection = new EventSource("/api/stream");
+    es = connection;
 
-  es.onmessage = (ev) => {
-    try {
-      const data: StreamEvent = JSON.parse(ev.data);
-      events.unshift(data); // newest first
-      if (events.length > MAX_EVENTS) events.pop();
-
+    connection.onopen = () => {
+      if (es !== connection) return;
       render(<Status connected={true} count={events.length} />, statusRoot);
-      render(<EventList events={events} />, eventsRoot);
-      render(<Stats events={events} />, statsRoot);
-    } catch {
-      /* ignore parse errors */
-    }
-  };
+    };
 
-  es.onerror = () => {
+    connection.onmessage = (ev) => {
+      if (es !== connection) return;
+      try {
+        const data: StreamEvent = JSON.parse(ev.data);
+        events.unshift(data); // newest first
+        if (events.length > MAX_EVENTS) events.pop();
+
+        render(<Status connected={true} count={events.length} />, statusRoot);
+        render(<EventList events={events} />, eventsRoot);
+        render(<Stats events={events} />, statsRoot);
+      } catch {
+        /* ignore parse errors */
+      }
+    };
+
+    connection.onerror = () => {
+      if (es !== connection) return;
+      render(<Status connected={false} count={events.length} />, statusRoot);
+    };
+  }
+
+  function disconnect() {
+    if (!es) return;
+    const connection = es;
+    es = null;
+    connection.close();
     render(<Status connected={false} count={events.length} />, statusRoot);
-  };
+  }
+
+  window.addEventListener("pagehide", disconnect);
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) connect();
+  });
+  connect();
 }

@@ -166,4 +166,16 @@ export function installNavigationPanel(inspect: typeof inspectDocument): void {
   });
   refresh.addEventListener("click", controller.refresh);
   copy.addEventListener("click", controller.copy);
+
+  const viewport = window.visualViewport;
+  if (viewport) {
+    const positionPanel = () => {
+      const visibleBottom = viewport.offsetTop + viewport.height;
+      panel.style.bottom = `${Math.max(16, window.innerHeight - visibleBottom + 16)}px`;
+      panel.style.maxHeight = `${Math.max(0, viewport.height - 32)}px`;
+    };
+    viewport.addEventListener("resize", positionPanel, { passive: true });
+    viewport.addEventListener("scroll", positionPanel, { passive: true });
+    positionPanel();
+  }
 }
