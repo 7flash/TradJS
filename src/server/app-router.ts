@@ -15,7 +15,11 @@ import {
   buildScopedStyle,
   buildAsset,
 } from "./build";
-import { getPrerendered, prerender as ssgPrerender } from "./ssg";
+import {
+  getOrRenderPrerendered,
+  resolveSSGConfig,
+  prerender as ssgPrerender,
+} from "./ssg";
 import { serve as serveHttp } from "./serve";
 import { httpMeasure } from "./measure";
 import type {
@@ -450,74 +454,76 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
     }
   }
 
+  const renderSSGRoute = async (route: any) => {
+    const pageModule = await import(route.filePath);
+    const PageComponent = pageModule.default || pageModule.Page;
+    if (!PageComponent) {
+      throw new Error(`No default export in ${route.filePath}`);
+    }
+
+    const pageIsAsync = isDeclaredAsyncComponent(PageComponent);
+    const wrapped = await wrapWithLayouts(
+      createElement(PageComponent, { params: {} }),
+      route.layouts,
+      route.pattern,
+    );
+
+    resetHead();
+    const html = await renderServerTree(
+      wrapped.tree,
+      pageIsAsync || wrapped.hasAsyncLayout,
+      `SSG route ${route.pattern}`,
+    );
+    const headElements = getHeadElements();
+    let fullHtml = `<!DOCTYPE html>${html}`;
+
+    if (globalCss) {
+      try {
+        const stylesPath = await buildStyle(globalCss);
+        fullHtml = fullHtml.replace(
+          "</head>",
+          `<link rel="stylesheet" href="${stylesPath}"></head>`,
+        );
+      } catch {}
+    }
+
+    if (headElements.length > 0) {
+      fullHtml = fullHtml.replace(
+        "</head>",
+        `${headElements.join("\n")}</head>`,
+      );
+    }
+
+    const scopedStylePath = await buildRouteScopedStyle(
+      route.filePath,
+      route.pattern,
+    );
+    if (scopedStylePath) {
+      fullHtml = fullHtml.replace(
+        "</head>",
+        `<link rel="stylesheet" href="${scopedStylePath}"></head>`,
+      );
+    }
+    const { clientBootstrap, importMapTag } = await collectClientAssets(
+      route.filePath,
+      route.layouts,
+      {},
+    );
+    if (importMapTag) {
+      fullHtml = fullHtml.replace("</head>", `${importMapTag}</head>`);
+    }
+    if (clientBootstrap) {
+      fullHtml = fullHtml.replace("</head>", `${clientBootstrap}</head>`);
+    }
+
+    fullHtml = applyRouteBodyAttributes(fullHtml, route.pattern);
+    return injectViewTransitions(fullHtml, viewTransitions);
+  };
+
   if (!isDev) {
     void (async () => {
       try {
-        const count = await ssgPrerender(routes, async (route: any) => {
-          const pageModule = await import(route.filePath);
-          const PageComponent = pageModule.default || pageModule.Page;
-          if (!PageComponent) {
-            throw new Error(`No default export in ${route.filePath}`);
-          }
-
-          const pageIsAsync = isDeclaredAsyncComponent(PageComponent);
-          const wrapped = await wrapWithLayouts(
-            createElement(PageComponent, { params: {} }),
-            route.layouts,
-            route.pattern,
-          );
-
-          resetHead();
-          const html = await renderServerTree(
-            wrapped.tree,
-            pageIsAsync || wrapped.hasAsyncLayout,
-            `SSG route ${route.pattern}`,
-          );
-          const headElements = getHeadElements();
-          let fullHtml = `<!DOCTYPE html>${html}`;
-
-          if (globalCss) {
-            try {
-              const stylesPath = await buildStyle(globalCss);
-              fullHtml = fullHtml.replace(
-                "</head>",
-                `<link rel="stylesheet" href="${stylesPath}"></head>`,
-              );
-            } catch {}
-          }
-
-          if (headElements.length > 0) {
-            fullHtml = fullHtml.replace(
-              "</head>",
-              `${headElements.join("\n")}</head>`,
-            );
-          }
-
-          const scopedStylePath = await buildRouteScopedStyle(
-            route.filePath,
-            route.pattern,
-          );
-          if (scopedStylePath) {
-            fullHtml = fullHtml.replace(
-              "</head>",
-              `<link rel="stylesheet" href="${scopedStylePath}"></head>`,
-            );
-          }
-          const { clientBootstrap, importMapTag } = await collectClientAssets(
-            route.filePath,
-            route.layouts,
-            {},
-          );
-          if (importMapTag) {
-            fullHtml = fullHtml.replace("</head>", `${importMapTag}</head>`);
-          }
-          if (clientBootstrap) {
-            fullHtml = fullHtml.replace("</head>", `${clientBootstrap}</head>`);
-          }
-
-          fullHtml = applyRouteBodyAttributes(fullHtml, route.pattern);
-          return injectViewTransitions(fullHtml, viewTransitions);
-        });
+        const count = await ssgPrerender(routes, renderSSGRoute);
         if (count > 0) console.log(`⚡ SSG: Pre-rendered ${count} pages`);
       } catch (error: any) {
         console.warn("SSG prerender failed:", error?.message || error);
@@ -573,16 +579,30 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       // Prerendered pages are served only after middleware has run, so an
       // auth check in middleware also guards SSG pages. Behind middleware the
       // response may depend on the user: keep it out of shared caches.
-      if (!isDev && match.route.type === "page") {
-        const cached = getPrerendered(pathname);
-        if (cached) {
-          return new Response(cached, {
+      if (
+        !isDev &&
+        match.route.type === "page" &&
+        match.route.paramNames.length === 0
+      ) {
+        const pageModule = await import(match.route.filePath);
+        const config = resolveSSGConfig(pageModule.ssg);
+        if (config) {
+          const html = await getOrRenderPrerendered(
+            pathname,
+            () => renderSSGRoute(match.route),
+            config.revalidateMs,
+          );
+          const maxAge =
+            config.revalidateMs === undefined
+              ? 3600
+              : Math.floor(config.revalidateMs / 1000);
+          return new Response(html, {
             headers: {
               "Content-Type": "text/html",
               "Cache-Control":
                 match.route.middlewares.length > 0
-                  ? "private, max-age=3600"
-                  : "public, max-age=3600",
+                  ? `private, max-age=${maxAge}`
+                  : `public, max-age=${maxAge}`,
               "X-TradJS-SSG": "1",
             },
           });

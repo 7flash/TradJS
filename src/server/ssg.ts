@@ -112,6 +112,15 @@ const standalone = createSSGCache();
 export function getPrerendered(pathname: string): string | null {
   return standalone.get(pathname);
 }
+
+export function getOrRenderPrerendered(
+  pathname: string,
+  render: () => Promise<string>,
+  revalidateMs?: number,
+): Promise<string> {
+  return standalone.getOrRender(pathname, render, revalidateMs);
+}
+
 export function setPrerendered(
   pathname: string,
   html: string,

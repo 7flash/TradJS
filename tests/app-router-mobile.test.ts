@@ -6,6 +6,10 @@ import { createAppRouter } from "../src/server/app-router";
 
 const showcaseDir = path.join(import.meta.dir, "..", "examples", "showcase", "app");
 
+/** The subprocess prints log lines too; the result is the last JSON line. */
+const lastJsonLine = (stdout: string) =>
+  stdout.split(/\r?\n/).findLast((line) => line.startsWith("{"))!;
+
 const get = async (handler: any, pathname: string) => {
   const res = (await handler(new Request(`http://localhost:3000${pathname}`))) as Response;
   return { res, html: await res.text() };
@@ -87,7 +91,7 @@ describe("SSG behind middleware", () => {
         cwd: path.join(import.meta.dir, ".."),
         env: { ...process.env, NODE_ENV: "production" },
       });
-      const result = JSON.parse(proc.stdout.toString().trim().split("\n").pop()!);
+      const result = JSON.parse(lastJsonLine(proc.stdout.toString()));
       expect(result.ssg).toBe("1");
       expect(result.deniedStatus).toBe(401);
       expect(result.deniedBody).toBe("denied");
@@ -118,7 +122,7 @@ describe("SSG output keeps client assets", () => {
       cwd: path.join(import.meta.dir, ".."),
       env: { ...process.env, NODE_ENV: "production" },
     });
-    const out = proc.stdout.toString().trim().split("\n").pop()!;
+    const out = lastJsonLine(proc.stdout.toString());
     const { ssg, html } = JSON.parse(out);
     expect(ssg).toBe("1");
     expect(html).toContain("__tradjsScripts");
