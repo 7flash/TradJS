@@ -18,6 +18,7 @@
 - SSG pages now regenerate after their revalidation period expires instead of permanently falling back to dynamic rendering. Concurrent cache misses share a single regeneration.
 - Text inside `<style>` and `<script>` elements is no longer HTML-escaped, so CSS selectors and JavaScript retain their intended content. Embedded closing tags are neutralized to prevent premature element termination.
 - Client scripts are now correctly discovered for `.js` and `.jsx` routes.
+- The client renderer creates nodes in the container's own document, so rendering into an iframe or another window works.
 - Expected view-transition cancellations, including `AbortError` and `TimeoutError` skips, no longer trigger the client error overlay. Unrelated errors remain visible.
 - The 404 page now includes a mobile viewport declaration.
 - The showcase reconnects its event stream after back/forward cache restoration and keeps previously displayed events.
