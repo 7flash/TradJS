@@ -6,6 +6,7 @@ import {
   type AsyncComponent,
 } from "../client/types";
 import { Head } from "./head";
+import { isRawTextElement, neutralizeRawTextEndTag, rawTextOf } from "./html";
 
 const ESCAPE_MAP: Record<string, string> = {
   "&": "&amp;",
@@ -123,6 +124,8 @@ export function renderToString(vnode: VNode | Child): string {
 
   if (propsObj.dangerouslySetInnerHTML) {
     html += propsObj.dangerouslySetInnerHTML.__html;
+  } else if (isRawTextElement(tagName)) {
+    html += neutralizeRawTextEndTag(rawTextOf(propsObj.children, Fragment), tagName);
   } else {
     html += renderChildrenToString(propsObj.children);
   }
@@ -175,6 +178,8 @@ export async function renderToStringAsync(
 
   if (propsObj.dangerouslySetInnerHTML) {
     html += propsObj.dangerouslySetInnerHTML.__html;
+  } else if (isRawTextElement(tagName)) {
+    html += neutralizeRawTextEndTag(rawTextOf(propsObj.children, Fragment), tagName);
   } else {
     html += await renderChildrenAsync(propsObj.children);
   }

@@ -1,6 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Fragment, type VNode, type Child } from "../client/types";
-import { escapeHtml, htmlAttributeName, isSafeHtmlName } from "./html";
+import {
+  escapeHtml,
+  htmlAttributeName,
+  isRawTextElement,
+  isSafeHtmlName,
+  neutralizeRawTextEndTag,
+  rawTextOf,
+} from "./html";
 import {
   attributeValue,
   isEventProp,
@@ -95,6 +102,8 @@ function renderHeadChild(child: HeadChild): string {
         }
       ).__html ?? "",
     );
+  } else if (isRawTextElement(tag)) {
+    html += neutralizeRawTextEndTag(rawTextOf(props.children, Fragment), tag);
   } else if (props.children !== undefined && props.children !== null) {
     html += renderHeadChild(props.children as HeadChild);
   }

@@ -10,6 +10,32 @@ export function escapeHtml(value: unknown): string {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 }
+/** <style> and <script> are raw-text elements: the HTML parser does not decode
+ *  character references inside them, so their text must not be escaped. */
+export function isRawTextElement(tag: string): boolean {
+  const name = tag.toLowerCase();
+  return name === "style" || name === "script";
+}
+
+/** Plain text of raw-text children: strings and numbers, through arrays and
+ *  fragments. Anything else (elements, components) has no raw-text meaning
+ *  and is dropped. */
+export function rawTextOf(children: unknown, fragment: unknown): string {
+  if (children === null || children === undefined || typeof children === "boolean") return "";
+  if (typeof children === "string" || typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map((child) => rawTextOf(child, fragment)).join("");
+  const vnode = children as { type?: unknown; props?: { children?: unknown } };
+  if (vnode && vnode.type === fragment) return rawTextOf(vnode.props?.children, fragment);
+  return "";
+}
+
+/** Keep raw text from closing its element early: a literal end tag (any case,
+ *  even split across children) becomes `<\\/style` / `<\\/script`. */
+export function neutralizeRawTextEndTag(text: string, tag: string): string {
+  const name = tag.toLowerCase();
+  return text.replace(new RegExp(`</(${name})`, "gi"), "<\\/$1");
+}
+
 export function serializeInlineScript(value: unknown): string {
   const json = JSON.stringify(value);
   if (json === undefined) return "null";
