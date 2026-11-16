@@ -387,7 +387,7 @@ Do not manually import or link `page.css`.
 
 Use `globals.css`, `global.css`, or `app.css` for application-wide styles.
 
-CSS Modules (`*.module.css`) are supported through imports in client bundles only.
+CSS Modules (`*.module.css`) work through imports in server-rendered components and client bundles alike.
 
 ## 6. Navigation Rules
 
@@ -432,7 +432,7 @@ In-memory client state resets across document navigations. Persist necessary sta
 
 5. **SSG assets are included on the updated branch.** Prerendered pages receive the normal client scripts and route-scoped `page.css`. Do not retain the old limitation claiming otherwise.
 
-6. **CSS Modules are client-bundle-only.** Use `page.css` for automatically scoped server-page styles.
+6. **CSS Modules work on server and client.** `import styles from "./x.module.css"` gives the same class names in server-rendered components and client bundles, and the page links the stylesheet. `page.css` remains the simplest way to scope a whole page.
 
 7. **Client initialization is ordered.** The updated bootstrap runs layout initializers before page initializers, using a render-blocking script in `<head>`. Do not add arbitrary timers to compensate for the old initialization timing.
 

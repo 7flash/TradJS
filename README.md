@@ -458,7 +458,7 @@ Route-scoped `page.css` is included for both dynamically rendered and SSG pages.
 
 For application-wide styles, create `app/globals.css`, `app/global.css`, or `app/app.css`. TradJS discovers and processes the first matching global stylesheet.
 
-Client bundles also support CSS Modules through `.module.css` imports. CSS Modules are supported in client bundles, not as automatic server-side component CSS Modules.
+CSS Modules work through `.module.css` imports in server-rendered pages, layouts and components as well as in client bundles, with the same class names on both sides. The page links every module stylesheet its imports use.
 
 ### 7. Static site generation (SSG)
 
