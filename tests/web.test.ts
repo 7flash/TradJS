@@ -445,7 +445,11 @@ describe("serve", () => {
     expect(chunks.length).toBe(3);
     expect(chunks[0]).toContain("<html>");
     expect(chunks[1]).toBe("<section>Body Chunk</section>");
-    expect(chunks[2]).toContain("</main></body></html>");
+    // The tail carries the render-readiness marker that cross-document view
+    // transitions wait for (link rel="expect"), right before </body>.
+    expect(chunks[2]).toContain("</main>");
+    expect(chunks[2]).toContain("data-tradjs-document-end");
+    expect(chunks[2]).toMatch(/data-tradjs-document-end[^>]*><\/span><\/body><\/html>$/);
   });
   test("should fall back to root route files when app dir is absent", async () => {
     const rootDir = path.join(testDir, "root-app");

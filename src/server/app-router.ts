@@ -6,6 +6,7 @@ import { createElement } from "../client/render";
 import { renderToString, renderToStringAsync } from "./ssr";
 import { resetHead, getHeadElements } from "./head";
 import { imports } from "./imports";
+import { injectViewTransitions } from "./document";
 import {
   buildScript,
   buildStyle,
@@ -26,8 +27,6 @@ import type {
 
 const isDev = process.env.NODE_ENV !== "production";
 const STREAM_SLOT_MARKUP = "<tradjs-stream-slot></tradjs-stream-slot>";
-const VIEW_TRANSITION_STYLE =
-  "<style data-tradjs-view-transitions>@view-transition { navigation: auto; } @media (prefers-reduced-motion: reduce) { @view-transition { navigation: none; } }</style>";
 
 function escapeHtml(value: string): string {
   return value.replace(
@@ -50,20 +49,6 @@ function safeJson(value: unknown): string {
 
 /** Route source extensions; `page.jsx` pairs with `page.client.tsx` like `page.tsx`. */
 const ROUTE_EXT = /\.(tsx?|jsx?)$/;
-
-function injectViewTransitions(html: string, enabled: boolean): string {
-  if (!enabled || html.includes("data-tradjs-view-transitions")) return html;
-  if (html.includes("</head>")) {
-    return html.replace("</head>", `${VIEW_TRANSITION_STYLE}</head>`);
-  }
-  if (html.startsWith("<!DOCTYPE html>")) {
-    return html.replace(
-      "<!DOCTYPE html>",
-      `<!DOCTYPE html>${VIEW_TRANSITION_STYLE}`,
-    );
-  }
-  return `${VIEW_TRANSITION_STYLE}${html}`;
-}
 
 function applyRouteBodyAttributes(html: string, routePattern: string): string {
   if (!html.includes("<body")) return html;
@@ -131,7 +116,7 @@ export function createClientBootstrap(
   const scriptEntries = safeJson(scripts);
   const paramsJson = safeJson(params);
   const devJson = JSON.stringify(isDev);
-  return `<script type="module">
+  return `<script type="module" blocking="render" data-tradjs-client>
 const __tradjsDev=${devJson};
 const __tradjsParams=${paramsJson};
 const __tradjsScripts=${scriptEntries};
@@ -163,15 +148,24 @@ const __tradjsShowClientError=(error,label='Client error')=>{
   if(detail)detail.textContent=__tradjsDev?__tradjsDescribeError(error):'The client failed to start. Check the server and browser logs.';
 };
 window.addEventListener('error',(event)=>__tradjsShowClientError(event.error||event.message,'Unhandled client error'));
-const __tradjsIsSkippedTransition=(error)=>error?.name==='AbortError'&&/transition/i.test(error?.message||'');
+const __tradjsIsSkippedTransition=(error)=>{
+  const name=error?.name;
+  const message=typeof error?.message==='string'?error.message:'';
+  return (name==='AbortError'&&/transition/i.test(message))||
+    (name==='TimeoutError'&&/view[ -]?transition/i.test(message));
+};
 window.addEventListener('unhandledrejection',(event)=>{
   if(__tradjsIsSkippedTransition(event.reason)){event.preventDefault();return}
   __tradjsShowClientError(event.reason,'Unhandled promise rejection');
 });
 for(const entry of __tradjsScripts){
-  import(entry.url)
-    .then(async(m)=>{if(typeof m.default==='function')await m.default({params:__tradjsParams})})
-    .catch((error)=>__tradjsShowClientError(error,'Failed to mount '+entry.type+' script'));
+  try{
+    const m=await import(entry.url);
+    if(typeof m.default==='function')await m.default({params:__tradjsParams});
+  }catch(error){
+    __tradjsShowClientError(error,'Failed to mount '+entry.type+' script');
+    break;
+  }
 }
 </script>`;
 }
@@ -518,7 +512,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
             fullHtml = fullHtml.replace("</head>", `${importMapTag}</head>`);
           }
           if (clientBootstrap) {
-            fullHtml = fullHtml.replace("</body>", `${clientBootstrap}</body>`);
+            fullHtml = fullHtml.replace("</head>", `${clientBootstrap}</head>`);
           }
 
           fullHtml = applyRouteBodyAttributes(fullHtml, route.pattern);
@@ -723,22 +717,18 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       if (importMapTag) {
         shellHtml = shellHtml.replace("</head>", `${importMapTag}</head>`);
       }
+      if (clientBootstrap) {
+        shellHtml = shellHtml.replace("</head>", `${clientBootstrap}</head>`);
+      }
       shellHtml = injectViewTransitions(shellHtml, viewTransitions);
 
       const slotIndex = shellHtml.indexOf(STREAM_SLOT_MARKUP);
       if (slotIndex === -1) {
-        let fullHtml = shellHtml + pageHtml;
-        if (clientBootstrap) {
-          fullHtml = fullHtml.replace("</body>", `${clientBootstrap}</body>`);
-        }
-        return new Response(fullHtml, { headers: responseHeaders });
+        return new Response(shellHtml + pageHtml, { headers: responseHeaders });
       }
 
       const prefix = shellHtml.slice(0, slotIndex);
-      let suffix = shellHtml.slice(slotIndex + STREAM_SLOT_MARKUP.length);
-      if (clientBootstrap) {
-        suffix = suffix.replace("</body>", `${clientBootstrap}</body>`);
-      }
+      const suffix = shellHtml.slice(slotIndex + STREAM_SLOT_MARKUP.length);
 
       const encoder = new TextEncoder();
       const stream = new ReadableStream({
