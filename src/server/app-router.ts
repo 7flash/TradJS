@@ -10,6 +10,8 @@ import { injectViewTransitions } from "./document";
 import {
   buildScript,
   buildStyle,
+  collectServerCSSModuleUrls,
+  registerServerCSSModules,
   buildClientScript,
   clientScriptsUsingReact,
   buildScopedStyle,
@@ -49,6 +51,26 @@ function escapeHtml(value: string): string {
 function safeJson(value: unknown): string {
   const json = JSON.stringify(value) ?? "null";
   return json.replace(/</g, "\\u003c");
+}
+
+async function addRouteCSSModuleLinks(
+  html: string,
+  entryPaths: readonly string[],
+): Promise<string> {
+  const urls = await collectServerCSSModuleUrls(entryPaths);
+  const existing = new Set(
+    [...html.matchAll(/<link\b[^>]*>/gi)]
+      .filter(([tag]) => /\brel=["']stylesheet["']/i.test(tag))
+      .map(([tag]) => /\bhref=["']([^"']+)["']/i.exec(tag)?.[1]),
+  );
+  const links = [...new Set(urls)]
+    .filter((url) => !existing.has(url))
+    .map((url) => `<link rel="stylesheet" href="${escapeHtml(url)}">`)
+    .join("\n");
+  if (!links) return html;
+  if (/<\/head>/i.test(html))
+    return html.replace(/<\/head>/i, `${links}</head>`);
+  return html.replace(/<html\b[^>]*>/i, (open) => `${open}<head>${links}</head>`);
 }
 
 /** Route source extensions; `page.jsx` pairs with `page.client.tsx` like `page.tsx`. */
@@ -422,6 +444,7 @@ async function collectClientAssets(
 }
 
 export function createAppRouter(options: AppRouterOptions = {}): Handler {
+  registerServerCSSModules();
   const { appDir = path.join(process.cwd(), "app"), viewTransitions = true } =
     options;
   const routes = discoverRoutes(appDir);
@@ -521,6 +544,9 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       fullHtml = fullHtml.replace("</head>", `${clientBootstrap}</head>`);
     }
 
+    fullHtml = await addRouteCSSModuleLinks(fullHtml, [
+      route.filePath, ...route.layouts,
+    ]);
     fullHtml = applyRouteBodyAttributes(fullHtml, route.pattern);
     return injectViewTransitions(fullHtml, viewTransitions);
   };
@@ -754,6 +780,9 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       if (clientBootstrap) {
         shellHtml = shellHtml.replace("</head>", `${clientBootstrap}</head>`);
       }
+      shellHtml = await addRouteCSSModuleLinks(shellHtml, [
+        match.route.filePath, ...match.route.layouts,
+      ]);
       shellHtml = injectViewTransitions(shellHtml, viewTransitions);
 
       const slotIndex = shellHtml.indexOf(STREAM_SLOT_MARKUP);
@@ -813,6 +842,10 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
                 );
               } catch {}
             }
+            fullErrorHtml = await addRouteCSSModuleLinks(fullErrorHtml, [
+              match.route.errorPath!,
+              ...match.route.layouts,
+            ]);
             fullErrorHtml = injectViewTransitions(
               fullErrorHtml,
               viewTransitions,

@@ -881,7 +881,7 @@ export async function buildCSSModule(
   );
 }
 async function buildCSSModuleImpl(filePath: string): Promise<CSSModuleResult> {
-  const absolutePath = path.resolve(process.cwd(), filePath);
+  const absolutePath = normalizeBuildKey(filePath);
   if (!existsSync(absolutePath)) {
     throw new Error(`CSS module not found: ${filePath}`);
   }
@@ -1008,4 +1008,89 @@ export function clearCaches() {
   buildInFlight.clear();
   clientScriptsUsingReact.clear();
   _detectedServerPackages = null;
+}
+
+// Runtime imports do not use buildClientScript's plugin pipeline.
+// Register before importing any router-discovered page or layout.
+let serverCSSModulePluginRegistered = false;
+export function registerServerCSSModules(): void {
+  if (serverCSSModulePluginRegistered) return;
+  Bun.plugin({
+    name: "tradjs-server-css-modules",
+    setup(builder) {
+      builder.onLoad({ filter: /\.module\.css$/, namespace: "file" }, async (args) => {
+        const { classMap } = await buildCSSModule(args.path);
+        return {
+          loader: "js",
+          contents: `export default ${JSON.stringify(classMap)};`,
+        };
+      });
+    },
+  });
+  serverCSSModulePluginRegistered = true;
+}
+
+/** Find CSS used by a route's static module graph (including nested components).
+ * Do not use a process-global "CSS loaded" set: Bun caches imports across
+ * requests and concurrent routes must not leak styles into one another.
+ */
+const serverCSSModuleUrlCache = new Map<string, Promise<string[]>>();
+
+export function collectServerCSSModuleUrls(
+  entries: readonly string[],
+): Promise<string[]> {
+  // Source files do not change in production: scan each route's graph once.
+  if (process.env.NODE_ENV !== "production")
+    return scanServerCSSModuleUrls(entries);
+  const key = entries.join("|");
+  let cached = serverCSSModuleUrlCache.get(key);
+  if (!cached) {
+    cached = scanServerCSSModuleUrls(entries);
+    cached.catch(() => serverCSSModuleUrlCache.delete(key));
+    serverCSSModuleUrlCache.set(key, cached);
+  }
+  return cached;
+}
+
+async function scanServerCSSModuleUrls(
+  entries: readonly string[],
+): Promise<string[]> {
+  const visited = new Set<string>();
+  const modules = new Set<string>();
+
+  const visit = (file: string): void => {
+    const absolute = normalizeBuildKey(file);
+    if (visited.has(absolute) || !existsSync(absolute)) return;
+    visited.add(absolute);
+    const ext = path.extname(absolute);
+    if (!/\.(?:[cm]?[jt]sx?)$/.test(ext)) return;
+    const loader = ext === ".mjs" || ext === ".cjs"
+      ? "js"
+      : ext === ".mts" || ext === ".cts"
+        ? "ts"
+        : getLoaderForExt(ext);
+    const imports = new Bun.Transpiler({ loader }).scanImports(
+      readFileSync(absolute, "utf8"),
+    );
+    for (const dependency of imports) {
+      let resolved: string;
+      try {
+        resolved = normalizeBuildKey(
+          Bun.resolveSync(dependency.path, path.dirname(absolute)),
+        );
+      } catch {
+        // Bun's runtime importer reports unresolved dependencies on import.
+        continue;
+      }
+      if (resolved.endsWith(".module.css")) modules.add(resolved);
+      else if (!resolved.includes(`${path.sep}node_modules${path.sep}`))
+        visit(resolved);
+    }
+  };
+
+  for (const entry of entries) visit(entry);
+  const urls = await Promise.all(
+    [...modules].map(async (file) => (await buildCSSModule(file)).cssUrl),
+  );
+  return [...new Set(urls)];
 }
