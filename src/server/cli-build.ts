@@ -1,5 +1,5 @@
 import path from "path";
-import { existsSync, mkdirSync, writeFileSync, lstatSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, lstatSync, realpathSync } from "node:fs";
 import {
   builtAssets,
   buildClientScript,
@@ -46,6 +46,7 @@ function addBuildInput(
 function collectAppBuildInputs(
   appDir: string,
   globalCss: string | null,
+  explicitGlobalCss = false,
 ): BuildInput[] {
   const inputs = new Map<string, BuildInput>();
   if (globalCss) {
@@ -82,6 +83,16 @@ function collectAppBuildInputs(
         route: route.pattern,
       });
     }
+  }
+  const root = realpathSync(appDir);
+  for (const input of inputs.values()) {
+    if (explicitGlobalCss && input.role === "global-style") continue;
+    const relative = path.relative(root, realpathSync(input.filePath));
+    if (
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) throw new Error(`Build input outside app directory: ${input.filePath}`);
   }
   return [...inputs.values()];
 }
@@ -123,6 +134,21 @@ async function buildInput(input: BuildInput): Promise<string> {
     },
   );
 }
+function assertNoOutputSymlinks(destination: string): void {
+  const absolute = path.resolve(destination);
+  const root = path.parse(absolute).root;
+  let current = root;
+  for (const segment of absolute.slice(root.length).split(path.sep)) {
+    if (!segment) continue;
+    current = path.join(current, segment);
+    try {
+      if (lstatSync(current).isSymbolicLink())
+        throw new Error(`Symlink in build output path: ${current}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
 function writeBuiltAssets(
   outDir: string,
   assetPaths: ReadonlySet<string>,
@@ -143,16 +169,7 @@ function writeBuiltAssets(
     const relative = path.relative(outDir, dest);
     if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
       throw new Error(`Asset escaped output directory: ${assetPath}`);
-    let candidate = outDir;
-    for (const part of parts) {
-      candidate = path.join(candidate, part);
-      try {
-        if (lstatSync(candidate).isSymbolicLink())
-          throw new Error(`Refusing to overwrite symlink: ${candidate}`);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
+    assertNoOutputSymlinks(dest);
     const asset = builtAssets[assetPath];
     if (!asset) throw new Error(`Built asset unavailable: ${assetPath}`);
     return { assetPath, dest, content: asset.content };
@@ -163,6 +180,7 @@ function writeBuiltAssets(
   for (const { assetPath, dest, content } of destinations) {
     const dir = path.dirname(dest);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    assertNoOutputSymlinks(dest);
     writeFileSync(dest, Buffer.from(content));
     assetCount++;
     totalBytes += content.byteLength;
@@ -174,6 +192,7 @@ function writeBuiltAssets(
 }
 export async function buildToDisk(options: BuildOptions = {}): Promise<void> {
   const outDir = path.resolve(options.outDir || "./dist");
+  assertNoOutputSymlinks(outDir);
   const entryMode = Boolean(options.entries?.length);
   const appDir = entryMode
     ? path.resolve(options.appDir || "./app")
@@ -195,7 +214,7 @@ export async function buildToDisk(options: BuildOptions = {}): Promise<void> {
   console.log("");
   const inputs = entryMode
     ? collectEntryBuildInputs(options.entries ?? [])
-    : collectAppBuildInputs(appDir, globalCss);
+    : collectAppBuildInputs(appDir, globalCss, Boolean(options.globalCss));
   if (entryMode) {
     console.log(`📦 Building ${inputs.length} entry point(s)...`);
   }

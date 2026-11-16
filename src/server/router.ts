@@ -3,6 +3,34 @@ import path from "path";
 import { errorMessage } from "./errors";
 import { routeMeasure } from "./measure";
 const CONVENTION_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js"] as const;
+// Match canonical path segments, not the encoded URL spelling.
+// Never treat an encoded slash or backslash as part of a route parameter.
+function canonicalPathname(pathname: string): string | null {
+  if (!pathname.startsWith("/")) return null;
+  const rawSegments = pathname.split("/");
+  if (rawSegments.length > 2 && rawSegments.at(-1) === "")
+    rawSegments.pop();
+  const segments: string[] = [];
+  for (const raw of rawSegments.slice(1)) {
+    if (!raw) {
+      if (pathname === "/") continue;
+      return null;
+    }
+    let segment: string;
+    try {
+      segment = decodeURIComponent(raw);
+    } catch {
+      return null;
+    }
+    if (
+      segment === "." || segment === ".." ||
+      /[\/\\\x00-\x1f\x7f]/.test(segment) ||
+      /%[0-9a-f]{2}/i.test(segment)
+    ) return null;
+    segments.push(segment);
+  }
+  return `/${segments.join("/")}`;
+}
 function isInsideDirectory(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
   return (
@@ -293,17 +321,14 @@ export function matchRoute(
   pathname: string,
   routes: Route[],
 ): RouteMatch | null {
+  const canonical = canonicalPathname(pathname);
+  if (canonical === null) return null;
   for (const route of routes) {
-    const match = pathname.match(route.regex);
+    const match = canonical.match(route.regex);
     if (match) {
       const params: Record<string, string> = Object.create(null);
       route.paramNames.forEach((name, index) => {
-        const rawValue = match[index + 1] ?? "";
-        try {
-          params[name] = decodeURIComponent(rawValue);
-        } catch {
-          params[name] = rawValue;
-        }
+        params[name] = match[index + 1] ?? "";
       });
       return { route, params };
     }
