@@ -4,7 +4,7 @@ import { dedent } from "ts-dedent";
 import { discoverRoutes, matchRoute } from "./router";
 import { createElement } from "../client/render";
 import { renderToString, renderToStringAsync } from "./ssr";
-import { resetHead, getHeadElements } from "./head";
+import { collectHeadAsync } from "./head";
 import { imports } from "./imports";
 import { injectViewTransitions } from "./document";
 import {
@@ -53,6 +53,15 @@ function safeJson(value: unknown): string {
 
 /** Route source extensions; `page.jsx` pairs with `page.client.tsx` like `page.tsx`. */
 const ROUTE_EXT = /\.(tsx?|jsx?)$/;
+
+function renderMetaTags(meta: readonly { name: string; content: string }[]): string {
+  return meta
+    .map(
+      (item) =>
+        `<meta name="${escapeHtml(item.name)}" content="${escapeHtml(item.content)}">`,
+    )
+    .join("\n");
+}
 
 function applyRouteBodyAttributes(html: string, routePattern: string): string {
   if (!html.includes("<body")) return html;
@@ -243,9 +252,7 @@ export async function frontendApp(
   if (!scriptVirtualPath)
     throw new Error(`Failed to build script: ${scriptPath}`);
 
-  const metaTags = meta
-    .map((item) => `<meta name="${item.name}" content="${item.content}">`)
-    .join("\n");
+  const metaTags = renderMetaTags(meta);
   const additionalHead = additionalAssets
     .map((asset) =>
       asset.type === "icon"
@@ -264,9 +271,9 @@ export async function frontendApp(
         <head>
           ${importMaps}
           <meta charset="utf-8">
-          <meta name="viewport" content="${viewport}">
+          <meta name="viewport" content="${escapeHtml(viewport)}">
           ${metaTags}
-          <title>${title}</title>
+          <title>${escapeHtml(title)}</title>
           ${additionalHead}
           ${headerScriptsHtml}
           ${head}
@@ -332,9 +339,7 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
     }
   }
 
-  const metaTags = meta
-    .map((item) => `<meta name="${item.name}" content="${item.content}">`)
-    .join("\n");
+  const metaTags = renderMetaTags(meta);
 
   return injectViewTransitions(
     dedent`
@@ -343,9 +348,9 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
         <head>
           ${importMaps}
           <meta charset="utf-8">
-          <meta name="viewport" content="${viewport}">
+          <meta name="viewport" content="${escapeHtml(viewport)}">
           ${metaTags}
-          <title>${title}</title>
+          <title>${escapeHtml(title)}</title>
           ${stylesVirtualPath ? `<link rel="stylesheet" href="${stylesVirtualPath}">` : ""}
         </head>
         <body>
@@ -468,13 +473,13 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       route.pattern,
     );
 
-    resetHead();
-    const html = await renderServerTree(
-      wrapped.tree,
-      pageIsAsync || wrapped.hasAsyncLayout,
-      `SSG route ${route.pattern}`,
+    const { value: html, head: headElements } = await collectHeadAsync(async () =>
+      renderServerTree(
+        wrapped.tree,
+        pageIsAsync || wrapped.hasAsyncLayout,
+        `SSG route ${route.pattern}`,
+      ),
     );
-    const headElements = getHeadElements();
     let fullHtml = `<!DOCTYPE html>${html}`;
 
     if (globalCss) {
@@ -598,10 +603,11 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
               : Math.floor(config.revalidateMs / 1000);
           return new Response(html, {
             headers: {
-              "Content-Type": "text/html",
+              "Content-Type": "text/html; charset=utf-8",
+              // Behind middleware the page may depend on who asks: never cache it.
               "Cache-Control":
                 match.route.middlewares.length > 0
-                  ? `private, max-age=${maxAge}`
+                  ? "no-store"
                   : `public, max-age=${maxAge}`,
               "X-TradJS-SSG": "1",
             },
@@ -671,14 +677,15 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       );
 
       const responseHeaders = {
-        "Content-Type": "text/html",
-        "Cache-Control": isDev ? "no-cache" : "public, max-age=3600",
+        "Content-Type": "text/html; charset=utf-8",
+        // Server-rendered pages may depend on the request (cookies, auth):
+        // only prerendered public pages are cacheable.
+        "Cache-Control": "no-store",
       };
 
       const pageIsAsync = isDeclaredAsyncComponent(PageComponent);
 
-      resetHead();
-      const pageHtml = await httpMeasure.measure(
+      const pageRender = await collectHeadAsync(() => httpMeasure.measure(
         {
           start: () => "SSR renderPage",
           end: (html: string) => ({ bytes: html.length }),
@@ -692,16 +699,16 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
             pageIsAsync,
             `page ${match.route.pattern}`,
           ),
-      );
-      const pageHeadElements = [...getHeadElements()];
+      ));
+      const pageHtml = pageRender.value;
+      const pageHeadElements = pageRender.head;
 
       const wrappedShell = await wrapWithLayouts(
         createElement("tradjs-stream-slot", {}),
         match.route.layouts,
         pathname,
       );
-      resetHead();
-      const shellHtmlOnly = await httpMeasure.measure(
+      const shellRender = await collectHeadAsync(() => httpMeasure.measure(
         {
           start: () => "SSR renderShell",
           end: (html: string) => ({ bytes: html.length }),
@@ -715,8 +722,9 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
             wrappedShell.hasAsyncLayout,
             `layout shell for ${match.route.pattern}`,
           ),
-      );
-      const layoutHeadElements = [...getHeadElements()];
+      ));
+      const shellHtmlOnly = shellRender.value;
+      const layoutHeadElements = shellRender.head;
       const headElements = [...layoutHeadElements, ...pageHeadElements];
 
       let shellHtml = `<!DOCTYPE html>${shellHtmlOnly}`;

@@ -95,7 +95,7 @@ describe("SSG behind middleware", () => {
       expect(result.ssg).toBe("1");
       expect(result.deniedStatus).toBe(401);
       expect(result.deniedBody).toBe("denied");
-      expect(result.cache).toContain("private");
+      expect(result.cache).toBe("no-store");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

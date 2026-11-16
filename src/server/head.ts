@@ -11,6 +11,7 @@ import {
 import {
   attributeValue,
   isEventProp,
+  isUnsafeUrlAttribute,
   styleObjectToString,
 } from "../shared/attributes";
 const headStorage = new AsyncLocalStorage<string[]>();
@@ -75,6 +76,7 @@ function renderHeadChild(child: HeadChild): string {
       key === "key" ||
       key === "ref" ||
       key === "dangerouslySetInnerHTML" ||
+      key.toLowerCase() === "srcdoc" ||
       isEventProp(key) ||
       !isSafeHtmlName(key)
     ) {
@@ -88,7 +90,7 @@ function renderHeadChild(child: HeadChild): string {
         ? styleObjectToString(value)
         : value,
     );
-    if (serialized !== null)
+    if (serialized !== null && !isUnsafeUrlAttribute(attribute, serialized))
       html += ` ${attribute}="${escapeHtml(serialized)}"`;
   }
   html += ">";

@@ -7,6 +7,14 @@ import {
 } from "../client/types";
 import { Head } from "./head";
 import { isRawTextElement, neutralizeRawTextEndTag, rawTextOf } from "./html";
+import {
+  attributeName,
+  attributeValue,
+  isEventProp,
+  isSafeHtmlName,
+  isUnsafeUrlAttribute,
+  styleObjectToString,
+} from "../shared/attributes";
 
 const ESCAPE_MAP: Record<string, string> = {
   "&": "&amp;",
@@ -54,28 +62,33 @@ function renderAttributes(propsObj: Record<string, any>): string {
       key === "children" ||
       key === "key" ||
       key === "ref" ||
-      key.startsWith("on")
+      key === "dangerouslySetInnerHTML" ||
+      isEventProp(key) ||
+      !isSafeHtmlName(key)
     ) {
       continue;
     }
     if (value === undefined || value === null || value === false) continue;
-    if (key === "className" || key === "class") {
-      html += ` class="${escapeHtml(String(value))}"`;
+    const name = attributeName(key);
+    // srcdoc is a whole HTML document; javascript:/vbscript:/data: URLs run code.
+    if (
+      !isSafeHtmlName(name) ||
+      name.toLowerCase() === "srcdoc" ||
+      isUnsafeUrlAttribute(name, value)
+    ) {
       continue;
     }
     if (key === "style" && typeof value === "object") {
-      const styleStr = Object.entries(value)
-        .map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}:${v}`)
-        .join(";");
-      html += ` style="${escapeHtml(styleStr)}"`;
+      html += ` style="${escapeHtml(styleObjectToString(value))}"`;
       continue;
     }
-    if (key === "dangerouslySetInnerHTML") continue;
-    if (value === true) {
-      html += ` ${key}`;
-    } else {
-      html += ` ${key}="${escapeHtml(String(value))}"`;
+    if (value === true && attributeValue(name, value) === "true") {
+      html += ` ${name}`;
+      continue;
     }
+    const serialized = attributeValue(name, value);
+    if (serialized === null) continue;
+    html += serialized === "" ? ` ${name}` : ` ${name}="${escapeHtml(serialized)}"`;
   }
   return html;
 }
@@ -117,6 +130,7 @@ export function renderToString(vnode: VNode | Child): string {
   }
 
   const tagName = type as string;
+  if (!isSafeHtmlName(tagName)) throw new TypeError(`Invalid HTML tag name: ${tagName}`);
   const propsObj = props || {};
   let html = `<${tagName}${renderAttributes(propsObj)}>`;
 
@@ -171,6 +185,7 @@ export async function renderToStringAsync(
   }
 
   const tagName = type as string;
+  if (!isSafeHtmlName(tagName)) throw new TypeError(`Invalid HTML tag name: ${tagName}`);
   const propsObj = props || {};
   let html = `<${tagName}${renderAttributes(propsObj)}>`;
 

@@ -83,7 +83,7 @@ assert.equal(globalThis.__renders, 3);
 `);
 });
 
-test("middleware runs before SSG hits and misses; its cache is private", () => {
+test("middleware runs before SSG hits and misses; its response is not cached", () => {
   runProduction(true, `
 const denied = await request({ "x-deny": "yes" });
 assert.equal(denied.status, 403);
@@ -91,8 +91,7 @@ assert.equal(denied.headers.get("x-tradjs-ssg"), null);
 const first = await request();
 assert.match(await first.text(), /render-1/);
 const header = first.headers.get("cache-control") ?? "";
-assert.match(header, /^private, max-age=\\d+$/);
-assert.ok(Number(header.split("=")[1]) <= 2);
+assert.equal(header, "no-store");
 assert.match(await (await request()).text(), /render-1/);
 assert.equal((await request({ "x-deny": "yes" })).status, 403);
 assert.equal(globalThis.__renders, 1);

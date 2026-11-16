@@ -1,4 +1,24 @@
 const SAFE_NAME = /^[A-Za-z][A-Za-z0-9:._-]*$/;
+const URL_ATTRIBUTES = new Set([
+  "href", "src", "action", "formaction", "xlink:href",
+  "poster", "data", "cite", "background", "srcset",
+]);
+const IMAGE_ATTRIBUTES = new Set(["src", "srcset", "poster"]);
+const SAFE_IMAGE_DATA = /^data:image\/(?:png|jpe?g|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon)[;,]/i;
+/** URL attributes that would run code: javascript:/vbscript: anywhere, and
+ *  data: except raster images in src, srcset and poster (data:image/svg+xml
+ *  and data:text/html can run script). */
+export function isUnsafeUrlAttribute(name: string, value: unknown): boolean {
+  const lower = name.toLowerCase();
+  if (!URL_ATTRIBUTES.has(lower)) return false;
+  const urls = lower === "srcset" ? String(value).split(",") : [String(value)];
+  return urls.some((raw) => {
+    const url = raw.replace(/[\u0000-\u0020\u007f]/g, "");
+    if (/^(?:javascript|vbscript):/i.test(url)) return true;
+    if (!/^data:/i.test(url)) return false;
+    return !(IMAGE_ATTRIBUTES.has(lower) && SAFE_IMAGE_DATA.test(url));
+  });
+}
 const ALIASES: Readonly<Record<string, string>> = {
   className: "class",
   htmlFor: "for",
