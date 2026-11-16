@@ -40,12 +40,21 @@ export interface Fiber {
 
 const rootFibers = new WeakMap<HTMLElement, Fiber>();
 const vnodeOwners = new WeakMap<VNode, Fiber>();
+const nodeOwners = new WeakMap<Node, Fiber>();
+const boundRefs = new WeakMap<Fiber, { ref: unknown; element: Element }>();
 let activeComponentFiber: Fiber | null = null;
 let renderInProgress = false;
+let activeRenderPass: RenderPass | null = null;
 let _renderScopedReconciler: ReconcilerName | Reconciler | null = null;
 
 export interface RenderOptions {
   reconciler?: ReconcilerName | Reconciler;
+}
+
+interface RenderPass {
+  created: Set<Fiber>;
+  cleaned: Set<Fiber>;
+  cleanupErrors: unknown[];
 }
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
@@ -59,7 +68,7 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 function assertSyncClientComponentResult(result: unknown): void {
   if (!isPromiseLike(result)) return;
   throw new Error(
-    "[tradjs] Client render() does not support async components. Await async work in a controller/action, update state, then repaint the affected render boundary.",
+    "[tradjs] Client render() does not support async components; browser render() is synchronous. Await async work in a controller/action, update state, then repaint the affected render boundary.",
   );
 }
 
@@ -68,11 +77,45 @@ function runRenderTransaction<T>(work: () => T): T {
     throw new Error("[tradjs] Cannot render during another render.");
   }
   renderInProgress = true;
+  const previousPass = activeRenderPass;
+  const pass: RenderPass = {
+    created: new Set(),
+    cleaned: new Set(),
+    cleanupErrors: [],
+  };
+  activeRenderPass = pass;
+  let result!: T;
+  let failed = false;
+  let failure: unknown;
   try {
-    return work();
+    result = work();
+  } catch (error) {
+    failed = true;
+    failure = error;
   } finally {
+    activeRenderPass = previousPass;
     renderInProgress = false;
   }
+
+  if (failed) {
+    if (pass.cleanupErrors.length) {
+      const aggregate = new AggregateError(
+        [failure, ...pass.cleanupErrors],
+        "[tradjs] Render failed and cleanup also failed.",
+      );
+      (aggregate as any).cause = failure;
+      throw aggregate;
+    }
+    throw failure;
+  }
+  if (pass.cleanupErrors.length === 1) throw pass.cleanupErrors[0];
+  if (pass.cleanupErrors.length > 1) {
+    throw new AggregateError(
+      pass.cleanupErrors,
+      "[tradjs] Multiple render cleanup operations failed.",
+    );
+  }
+  return result;
 }
 
 export function render(
@@ -83,17 +126,45 @@ export function render(
   return runRenderTransaction(() => {
     let rootFiber = rootFibers.get(container);
     if (!rootFiber) {
-      while (container.firstChild) container.removeChild(container.firstChild);
-      rootFiber = createFiber(null, null, container.ownerDocument);
-      rootFiber.node = container;
+      const ownerFiber = nodeOwners.get(container);
+      if (ownerFiber) {
+        rootFiber = ownerFiber;
+      } else {
+        for (
+          let ancestor = container.parentNode;
+          ancestor;
+          ancestor = ancestor.parentNode
+        ) {
+          if (nodeOwners.has(ancestor)) {
+            throw new Error(
+              "[tradjs] Cannot render into an untracked descendant.",
+            );
+          }
+        }
+        rootFiber = createFiber(null, null, container.ownerDocument);
+        rootFiber.node = container;
+        nodeOwners.set(container, rootFiber);
+        rootFibers.set(container, rootFiber);
+        const cleanupCount = activeRenderPass!.cleanupErrors.length;
+        clearInitialContainer(rootFiber, container);
+        if (activeRenderPass!.cleanupErrors.length > cleanupCount) {
+          return rootFiber;
+        }
+      }
       rootFibers.set(container, rootFiber);
     }
 
     const prev = _renderScopedReconciler;
     _renderScopedReconciler = options?.reconciler ?? null;
     try {
-      const newChildren = vnode ? [vnode] : [];
-      diffChildren(rootFiber, container, rootFiber.children, newChildren);
+      const previousFibers = snapshotFibers(rootFiber.children);
+      try {
+        const newChildren = vnode ? [vnode] : [];
+        diffChildren(rootFiber, container, rootFiber.children, newChildren);
+      } catch (error) {
+        rollbackRenderTarget(rootFiber, container, previousFibers);
+        throw error;
+      }
     } finally {
       _renderScopedReconciler = prev;
     }
@@ -125,7 +196,7 @@ function createFiber(
   parent: Fiber | null,
   ownerDocument?: Document | null,
 ): Fiber {
-  return {
+  const fiber: Fiber = {
     ownerDocument: ownerDocument ?? parent?.ownerDocument ?? null,
     node: null,
     vnode,
@@ -135,6 +206,8 @@ function createFiber(
     key:
       vnode && typeof vnode === "object" && "key" in vnode ? vnode.key : null,
   };
+  if (parent) activeRenderPass?.created.add(fiber);
+  return fiber;
 }
 
 function collectNodes(fiber: Fiber): Node[] {
@@ -306,7 +379,10 @@ function patchProps(
   const safeNewProps = newProps || {};
   for (const key of Object.keys(safeOldProps)) {
     if (key === "children" || key === "key" || key === "ref") continue;
-    if (key in safeNewProps) continue;
+    if (
+      key in safeNewProps &&
+      !(key.startsWith("on") && typeof safeNewProps[key] !== "function")
+    ) continue;
     if (key.startsWith("on") && typeof safeOldProps[key] === "function") {
       const event = key.slice(2).toLowerCase();
       const oldListener = fiber.listeners.get(event);
@@ -316,6 +392,8 @@ function patchProps(
       }
     } else if (isFormStateProp(el, key)) {
       setDomProp(el, key, null);
+    } else if (key === "dangerouslySetInnerHTML") {
+      el.innerHTML = "";
     } else if (key === "className" || key === "class") {
       setElementClass(el, "");
     } else if (key === "style") {
@@ -328,6 +406,10 @@ function patchProps(
   for (const [key, value] of Object.entries(safeNewProps)) {
     if (key === "children" || key === "key" || key === "ref") continue;
     if (isFormStateProp(el, key)) continue;
+    if (key === "dangerouslySetInnerHTML") {
+      el.innerHTML = value?.__html ?? "";
+      continue;
+    }
     if (safeOldProps[key] === value) continue;
     if (key === "className" || key === "class") {
       setElementClass(el, value);
@@ -535,6 +617,7 @@ function mountVNode(
   const fiber = createFiber(vnode, parentFiber);
   const el = createDomElement(type as string, parentNode, documentFor(fiber, parentNode));
   fiber.node = el;
+  nodeOwners.set(el, fiber);
 
   applyProps(el, props, fiber);
 
@@ -553,23 +636,115 @@ function mountVNode(
 function removeFiber(fiber: Fiber, parentNode: Node): void {
   const nodes = collectNodes(fiber);
   for (const node of nodes) {
-    if (node.parentNode) node.parentNode.removeChild(node);
+    try {
+      if (node.parentNode) node.parentNode.removeChild(node);
+    } catch (error) {
+      recordCleanupError(error);
+    }
   }
   cleanupFiber(fiber);
 }
 
+function snapshotFibers(fibers: Fiber[]): Fiber[] {
+  const result: Fiber[] = [];
+  const visit = (fiber: Fiber): void => {
+    result.push(fiber);
+    for (const child of fiber.children) visit(child);
+  };
+  for (const fiber of fibers) visit(fiber);
+  return result;
+}
+
+function recordCleanupError(error: unknown): void {
+  if (activeRenderPass) activeRenderPass.cleanupErrors.push(error);
+  else throw error;
+}
+
+function cleanupNestedRoots(container: Node, rootFiber: Fiber): void {
+  const visit = (node: Node): void => {
+    if (isElementNode(node)) {
+      const element = node as HTMLElement;
+      const nested = rootFibers.get(element);
+      if (nested && nested !== rootFiber) {
+        cleanupFiber(nested);
+        rootFibers.delete(element);
+      }
+    }
+    for (let child = node.firstChild; child; child = child.nextSibling) {
+      visit(child);
+    }
+  };
+  for (let child = container.firstChild; child; child = child.nextSibling) {
+    visit(child);
+  }
+}
+
+function removeContainerChildren(container: Node): void {
+  for (let child = container.firstChild; child; ) {
+    const next = child.nextSibling;
+    try {
+      container.removeChild(child);
+    } catch (error) {
+      recordCleanupError(error);
+    }
+    child = next;
+  }
+}
+
+function clearInitialContainer(rootFiber: Fiber, container: Node): void {
+  cleanupNestedRoots(container, rootFiber);
+  removeContainerChildren(container);
+  rootFiber.children = [];
+}
+
+function rollbackRenderTarget(
+  rootFiber: Fiber,
+  container: Node,
+  previousFibers: Fiber[],
+): void {
+  for (const fiber of previousFibers) cleanupFiber(fiber);
+  const pass = activeRenderPass;
+  if (pass) {
+    for (const fiber of pass.created) cleanupFiber(fiber);
+  }
+  cleanupNestedRoots(container, rootFiber);
+  removeContainerChildren(container);
+  rootFiber.children = [];
+}
+
 function cleanupFiber(fiber: Fiber): void {
-  if (isElementNode(fiber.node)) {
-    const vnode = fiber.vnode;
-    if (vnode && typeof vnode === "object" && "type" in vnode) {
-      releaseRef(vnode.props?.ref, fiber.node, fiber);
+  const pass = activeRenderPass;
+  if (pass) {
+    if (pass.cleaned.has(fiber)) return;
+    pass.cleaned.add(fiber);
+  }
+
+  const node = fiber.node;
+  if (isElementNode(node)) {
+    const bound = boundRefs.get(fiber);
+    if (bound) {
+      try {
+        releaseRef(bound.ref, bound.element, fiber);
+      } catch (error) {
+        recordCleanupError(error);
+      }
     }
     for (const [event, listener] of fiber.listeners) {
-      fiber.node.removeEventListener(event, listener);
+      try {
+        node.removeEventListener(event, listener);
+      } catch (error) {
+        recordCleanupError(error);
+      }
+    }
+    if (nodeOwners.get(node) === fiber) nodeOwners.delete(node);
+    if (rootFibers.get(node as HTMLElement) === fiber) {
+      rootFibers.delete(node as HTMLElement);
     }
   }
   fiber.listeners.clear();
-  for (const child of fiber.children) {
+
+  const children = [...fiber.children];
+  for (const child of children) {
     cleanupFiber(child);
   }
   fiber.children = [];
@@ -628,23 +803,41 @@ function bindRef(
   fiber: Fiber,
   owner: Fiber | null,
 ): void {
-  if (isBoundary(ref)) {
-    attachBoundary(ref, element, fiber, (options) =>
-      renderBoundary(ref, fiber, owner, options),
-    );
-    return;
-  }
-  if (ref && typeof ref === "object" && "current" in ref) {
-    (ref as { current: Element | null }).current = element;
+  if (ref == null) return;
+  const current = boundRefs.get(fiber);
+  if (current?.ref === ref && current.element === element) return;
+
+  boundRefs.set(fiber, { ref, element });
+  try {
+    if (isBoundary(ref)) {
+      attachBoundary(ref, element, fiber, (options) =>
+        renderBoundary(ref, fiber, owner, options),
+      );
+    } else if (typeof ref === "function") {
+      (ref as (node: Element | null) => void)(element);
+    } else if (typeof ref === "object" && "current" in ref) {
+      (ref as { current: Element | null }).current = element;
+    }
+  } catch (error) {
+    try {
+      releaseRef(ref, element, fiber);
+    } catch (cleanupError) {
+      recordCleanupError(cleanupError);
+    }
+    throw error;
   }
 }
 
 function releaseRef(ref: unknown, element: Element, fiber: Fiber): void {
+  const bound = boundRefs.get(fiber);
+  if (!bound || bound.ref !== ref || bound.element !== element) return;
+  boundRefs.delete(fiber);
+
   if (isBoundary(ref)) {
     detachBoundary(ref, element, fiber);
-    return;
-  }
-  if (
+  } else if (typeof ref === "function") {
+    (ref as (node: Element | null) => void)(null);
+  } else if (
     ref &&
     typeof ref === "object" &&
     "current" in ref &&
@@ -676,36 +869,42 @@ function renderBoundary(
   }
 
   return runRenderTransaction(() => {
-    const result = executeComponent(
-      ownerFiber,
-      ownerVNode.type as Component,
-      ownerVNode.props,
-    );
-    const nextHost = findBoundaryHost(result, boundary, ownerFiber);
-    if (!nextHost) return false;
-    const currentHost = hostFiber.vnode;
-    if (
-      !currentHost ||
-      typeof currentHost !== "object" ||
-      !("type" in currentHost) ||
-      currentHost.type !== nextHost.type
-    ) {
-      return false;
-    }
-
-    const previous = _renderScopedReconciler;
-    _renderScopedReconciler = options?.reconciler ?? null;
+    const previousFibers = snapshotFibers(hostFiber.children);
     try {
-      diffChildren(
-        hostFiber,
-        host,
-        hostFiber.children,
-        normalizeChildren(nextHost.props.children),
+      const result = executeComponent(
+        ownerFiber,
+        ownerVNode.type as Component,
+        ownerVNode.props,
       );
-    } finally {
-      _renderScopedReconciler = previous;
+      const nextHost = findBoundaryHost(result, boundary, ownerFiber);
+      if (!nextHost) return false;
+      const currentHost = hostFiber.vnode;
+      if (
+        !currentHost ||
+        typeof currentHost !== "object" ||
+        !("type" in currentHost) ||
+        currentHost.type !== nextHost.type
+      ) {
+        return false;
+      }
+
+      const previous = _renderScopedReconciler;
+      _renderScopedReconciler = options?.reconciler ?? null;
+      try {
+        diffChildren(
+          hostFiber,
+          host,
+          hostFiber.children,
+          normalizeChildren(nextHost.props.children),
+        );
+      } finally {
+        _renderScopedReconciler = previous;
+      }
+      return true;
+    } catch (error) {
+      rollbackRenderTarget(hostFiber, host, previousFibers);
+      throw error;
     }
-    return true;
   });
 }
 

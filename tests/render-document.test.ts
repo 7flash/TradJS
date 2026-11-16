@@ -37,9 +37,16 @@ test("render creates every node in the container's document, not the global one"
 test("render works with no global document at all", () => {
   const dom = new JSDOM('<div id="root"></div>');
   const root = dom.window.document.getElementById("root")!;
-  expect(typeof (globalThis as any).document).toBe("undefined");
-  render(h("p", null, "hello ", h("b", null, "world")), root);
-  expect(root.innerHTML).toBe("<p>hello <b>world</b></p>");
-  render(null, root);
-  dom.window.close();
+  // Other test files may install a global document; remove it for this test.
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Reflect.deleteProperty(globalThis, "document");
+  try {
+    expect(typeof (globalThis as any).document).toBe("undefined");
+    render(h("p", null, "hello ", h("b", null, "world")), root);
+    expect(root.innerHTML).toBe("<p>hello <b>world</b></p>");
+    render(null, root);
+  } finally {
+    dom.window.close();
+    if (previous) Object.defineProperty(globalThis, "document", previous);
+  }
 });
