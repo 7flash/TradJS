@@ -34,6 +34,7 @@
 
 ### Added
 
+- CSS Modules (`*.module.css`) now work in server-rendered pages, layouts and components, with the same class names as the client bundle; the page links the stylesheets it uses.
 - Layouts now receive a `pathname` property, allowing navigation elements to identify the current route. During SSG prerendering, this property contains the route pattern.
 - SSG routes now support automatic cache regeneration after their configured revalidation interval, with simultaneous regeneration requests deduplicated.
 
