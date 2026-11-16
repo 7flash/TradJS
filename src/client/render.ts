@@ -28,6 +28,8 @@ import {
 } from "./dom";
 
 export interface Fiber {
+  /** Document of the render container; every node of this tree is created in it. */
+  ownerDocument: Document | null;
   node: Node | null;
   vnode: VNode | Child;
   parent: Fiber | null;
@@ -82,7 +84,7 @@ export function render(
     let rootFiber = rootFibers.get(container);
     if (!rootFiber) {
       while (container.firstChild) container.removeChild(container.firstChild);
-      rootFiber = createFiber(null, null);
+      rootFiber = createFiber(null, null, container.ownerDocument);
       rootFiber.node = container;
       rootFibers.set(container, rootFiber);
     }
@@ -99,8 +101,32 @@ export function render(
   });
 }
 
-function createFiber(vnode: VNode | Child, parent: Fiber | null): Fiber {
+function isElementNode(node: unknown): node is Element {
+  return !!node && (node as Node).nodeType === 1;
+}
+
+function isTextNode(node: unknown): node is Text {
+  return !!node && (node as Node).nodeType === 3;
+}
+
+/** The document to create nodes in: the parent node's, else the render
+ *  container's (kept on the fiber), else the global one. */
+function documentFor(fiber: Fiber, parentNode?: Node): Document {
+  const doc =
+    parentNode?.ownerDocument ??
+    fiber.ownerDocument ??
+    (typeof document !== "undefined" ? document : null);
+  if (!doc) throw new Error("[tradjs] No document to render into.");
+  return doc;
+}
+
+function createFiber(
+  vnode: VNode | Child,
+  parent: Fiber | null,
+  ownerDocument?: Document | null,
+): Fiber {
   return {
+    ownerDocument: ownerDocument ?? parent?.ownerDocument ?? null,
     node: null,
     vnode,
     parent,
@@ -121,7 +147,7 @@ function collectNodes(fiber: Fiber): Node[] {
       fiber.vnode.type === Fragment
     )
   ) {
-    if (fiber.node instanceof Element || fiber.node instanceof Text) {
+    if (isElementNode(fiber.node) || isTextNode(fiber.node)) {
       return [fiber.node];
     }
   }
@@ -368,7 +394,7 @@ function patchFiber(
   }
 
   if (typeof newVNode === "string" || typeof newVNode === "number") {
-    if (oldFiber.node instanceof Text) {
+    if (isTextNode(oldFiber.node)) {
       const text = String(newVNode);
       if (oldFiber.node.textContent !== text) {
         oldFiber.node.textContent = text;
@@ -429,7 +455,7 @@ function patchFiber(
     }
 
     const el = oldFiber.node;
-    if (el instanceof Element) {
+    if (isElementNode(el)) {
       if (oldVNode.props.ref !== newVNode.props.ref) {
         releaseRef(oldVNode.props.ref, el, oldFiber);
       }
@@ -477,7 +503,7 @@ function mountVNode(
 
   if (typeof vnode === "string" || typeof vnode === "number") {
     const fiber = createFiber(vnode, parentFiber);
-    fiber.node = document.createTextNode(String(vnode));
+    fiber.node = documentFor(fiber, parentNode).createTextNode(String(vnode));
     if (parentNode) parentNode.appendChild(fiber.node);
     return fiber;
   }
@@ -506,8 +532,8 @@ function mountVNode(
     return fiber;
   }
 
-  const el = createDomElement(type as string, parentNode);
   const fiber = createFiber(vnode, parentFiber);
+  const el = createDomElement(type as string, parentNode, documentFor(fiber, parentNode));
   fiber.node = el;
 
   applyProps(el, props, fiber);
@@ -533,7 +559,7 @@ function removeFiber(fiber: Fiber, parentNode: Node): void {
 }
 
 function cleanupFiber(fiber: Fiber): void {
-  if (fiber.node instanceof Element) {
+  if (isElementNode(fiber.node)) {
     const vnode = fiber.vnode;
     if (vnode && typeof vnode === "object" && "type" in vnode) {
       releaseRef(vnode.props?.ref, fiber.node, fiber);
@@ -635,7 +661,7 @@ function renderBoundary(
   options?: RenderOptions,
 ): boolean {
   const host = hostFiber.node;
-  if (!(host instanceof Element) || boundary.current !== host) {
+  if (!isElementNode(host) || boundary.current !== host) {
     return false;
   }
   if (!ownerFiber) return false;

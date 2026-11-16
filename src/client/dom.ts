@@ -71,7 +71,11 @@ export const SVG_TAGS = new Set([
 export function isSvgElement(el: Element): el is SVGElement {
   return el.namespaceURI === SVG_NS;
 }
-export function createDomElement(tag: string, parentNode?: Node): Element {
+export function createDomElement(
+  tag: string,
+  parentNode?: Node,
+  ownerDocument?: Document,
+): Element {
   const parentElement =
     parentNode?.nodeType === 1 ? (parentNode as Element) : null;
   const inheritsSvgNamespace =
@@ -80,7 +84,7 @@ export function createDomElement(tag: string, parentNode?: Node): Element {
     parentElement.localName !== "foreignObject";
   const svg =
     tag === "svg" || inheritsSvgNamespace || (!parentNode && SVG_TAGS.has(tag));
-  const doc = parentNode?.ownerDocument ?? document;
+  const doc = parentNode?.ownerDocument ?? ownerDocument ?? document;
   return svg ? doc.createElementNS(SVG_NS, tag) : doc.createElement(tag);
 }
 export function domAttributeName(el: Element, key: string): string {
