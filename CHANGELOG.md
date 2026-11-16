@@ -9,6 +9,8 @@
 - In 4.5.1, unsafe SSR attribute names and values could cause attribute injection, and unescaped page titles could inject HTML or scripts. SSR now validates HTML attribute and tag names, removes event handlers regardless of case, rejects `srcdoc` and unsafe URL schemes, and escapes title, viewport, and metadata values.
 - In 4.5.1, concurrent requests could share `<Head>` elements, causing titles and metadata from one request to appear in another response. Each page, layout, and SSG render now isolates its own `<Head>` elements.
 - `<Head>` now also rejects executable URLs and `srcdoc` attributes, consistent with SSR attribute handling.
+- In 4.5.1, routes were matched on the encoded URL, so `GET /%61dmin` could reach a sibling `/:slug` route instead of `/admin` and skip its middleware, and `GET /admin/` could fall through to a catch-all. Paths are now decoded once per segment and trailing slashes normalized before matching; encoded slashes, backslashes, control characters, dot segments and malformed or double encoding return 404.
+- CLI builds no longer read an automatically discovered `globals.css` through a symlink pointing outside the app, or write through an output directory that is (or sits under) a symlink.
 
 ### Fixed
 
