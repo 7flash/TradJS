@@ -48,6 +48,9 @@ function safeJson(value: unknown): string {
   return json.replace(/</g, "\\u003c");
 }
 
+/** Route source extensions; `page.jsx` pairs with `page.client.tsx` like `page.tsx`. */
+const ROUTE_EXT = /\.(tsx?|jsx?)$/;
+
 function injectViewTransitions(html: string, enabled: boolean): string {
   if (!enabled || html.includes("data-tradjs-view-transitions")) return html;
   if (html.includes("</head>")) {
@@ -99,7 +102,11 @@ function renderServerTree(
   }
 }
 
-async function wrapWithLayouts(tree: any, layoutPaths: string[]) {
+async function wrapWithLayouts(
+  tree: any,
+  layoutPaths: string[],
+  pathname: string,
+) {
   let wrappedTree = tree;
   let hasAsyncLayout = false;
   for (let i = layoutPaths.length - 1; i >= 0; i--) {
@@ -107,7 +114,10 @@ async function wrapWithLayouts(tree: any, layoutPaths: string[]) {
     const LayoutComponent = layoutModule.default;
     if (LayoutComponent) {
       hasAsyncLayout ||= isDeclaredAsyncComponent(LayoutComponent);
-      wrappedTree = createElement(LayoutComponent, { children: wrappedTree });
+      wrappedTree = createElement(LayoutComponent, {
+        children: wrappedTree,
+        pathname,
+      });
     }
   }
   return { tree: wrappedTree, hasAsyncLayout };
@@ -351,6 +361,63 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
   );
 }
 
+/** Route-scoped stylesheet (`page.css` beside the page), shared by SSR and SSG. */
+async function buildRouteScopedStyle(
+  routeFilePath: string,
+  pattern: string,
+): Promise<string> {
+  const pageCssPath = routeFilePath.replace(ROUTE_EXT, ".css");
+  if (!existsSync(pageCssPath)) return "";
+  try {
+    return await buildScopedStyle(pageCssPath, pattern);
+  } catch (error) {
+    console.warn("Failed to build scoped CSS:", error);
+    return "";
+  }
+}
+
+/** Layout and page client bundles, their bootstrap and the React import map,
+ *  shared by dynamic rendering and SSG so prerendered pages stay interactive. */
+async function collectClientAssets(
+  routeFilePath: string,
+  layouts: string[],
+  params: Record<string, any>,
+): Promise<{ clientBootstrap: string; importMapTag: string }> {
+  const clientScriptUrls: { url: string; type: "layout" | "page" }[] = [];
+  const clientPaths: string[] = [];
+  const add = async (clientPath: string, type: "layout" | "page") => {
+    if (!existsSync(clientPath)) return;
+    const scriptPath = await buildClientScript(clientPath);
+    if (!scriptPath) {
+      throw new Error(
+        `[tradjs] ${type === "layout" ? "Layout" : "Page"} client bundle produced no output: ${clientPath}`,
+      );
+    }
+    clientScriptUrls.push({ url: scriptPath, type });
+    clientPaths.push(clientPath);
+  };
+  for (const layoutPath of layouts) {
+    await add(layoutPath.replace(ROUTE_EXT, ".client.tsx"), "layout");
+  }
+  await add(routeFilePath.replace(ROUTE_EXT, ".client.tsx"), "page");
+
+  let importMapTag = "";
+  if (clientPaths.some((clientPath) => clientScriptsUsingReact.has(clientPath))) {
+    try {
+      const importMapJson = JSON.stringify(
+        await imports(["react-dom/client", "react/jsx-dev-runtime"]),
+      );
+      importMapTag = `<script type="importmap">${importMapJson}</script>`;
+    } catch (error) {
+      console.warn("Failed to generate React import maps:", error);
+    }
+  }
+  return {
+    clientBootstrap: createClientBootstrap(clientScriptUrls, params),
+    importMapTag,
+  };
+}
+
 export function createAppRouter(options: AppRouterOptions = {}): Handler {
   const { appDir = path.join(process.cwd(), "app"), viewTransitions = true } =
     options;
@@ -403,6 +470,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
           const wrapped = await wrapWithLayouts(
             createElement(PageComponent, { params: {} }),
             route.layouts,
+            route.pattern,
           );
 
           resetHead();
@@ -431,6 +499,28 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
             );
           }
 
+          const scopedStylePath = await buildRouteScopedStyle(
+            route.filePath,
+            route.pattern,
+          );
+          if (scopedStylePath) {
+            fullHtml = fullHtml.replace(
+              "</head>",
+              `<link rel="stylesheet" href="${scopedStylePath}"></head>`,
+            );
+          }
+          const { clientBootstrap, importMapTag } = await collectClientAssets(
+            route.filePath,
+            route.layouts,
+            {},
+          );
+          if (importMapTag) {
+            fullHtml = fullHtml.replace("</head>", `${importMapTag}</head>`);
+          }
+          if (clientBootstrap) {
+            fullHtml = fullHtml.replace("</body>", `${clientBootstrap}</body>`);
+          }
+
           fullHtml = applyRouteBodyAttributes(fullHtml, route.pattern);
           return injectViewTransitions(fullHtml, viewTransitions);
         });
@@ -448,7 +538,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
 
     if (!match) {
       const notFoundHtml = injectViewTransitions(
-        `<!DOCTYPE html><html><head><meta charset="utf-8"><title>404 - Not Found</title></head><body><h1>404 - Not Found</h1></body></html>`,
+        `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>404 - Not Found</title></head><body><h1>404 - Not Found</h1></body></html>`,
         viewTransitions,
       );
       return new Response(notFoundHtml, {
@@ -550,77 +640,15 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
         }
       }
 
-      let scopedStylePath = "";
-      const pageCssPath = match.route.filePath.replace(
-        /\.(tsx?|jsx?)$/,
-        ".css",
+      const scopedStylePath = await buildRouteScopedStyle(
+        match.route.filePath,
+        match.route.pattern,
       );
-      if (existsSync(pageCssPath)) {
-        try {
-          scopedStylePath = await buildScopedStyle(
-            pageCssPath,
-            match.route.pattern,
-          );
-        } catch (error) {
-          console.warn("Failed to build scoped CSS:", error);
-        }
-      }
-
-      const clientScriptUrls: { url: string; type: "layout" | "page" }[] = [];
-      for (const layoutPath of match.route.layouts) {
-        const layoutClientPath = layoutPath.replace(/\.tsx?$/, ".client.tsx");
-        if (existsSync(layoutClientPath)) {
-          const scriptPath = await buildClientScript(layoutClientPath);
-          if (!scriptPath) {
-            throw new Error(
-              `[tradjs] Layout client bundle produced no output: ${layoutClientPath}`,
-            );
-          }
-          clientScriptUrls.push({ url: scriptPath, type: "layout" });
-        }
-      }
-
-      const pageClientPath = match.route.filePath.replace(
-        /\.tsx?$/,
-        ".client.tsx",
-      );
-      if (existsSync(pageClientPath)) {
-        const scriptPath = await buildClientScript(pageClientPath);
-        if (!scriptPath) {
-          throw new Error(
-            `[tradjs] Page client bundle produced no output: ${pageClientPath}`,
-          );
-        }
-        clientScriptUrls.push({ url: scriptPath, type: "page" });
-      }
-
-      const clientBootstrap = createClientBootstrap(
-        clientScriptUrls,
+      const { clientBootstrap, importMapTag } = await collectClientAssets(
+        match.route.filePath,
+        match.route.layouts,
         match.params,
       );
-      const allClientPaths = [
-        ...match.route.layouts
-          .map((layoutPath: string) =>
-            layoutPath.replace(/\.tsx?$/, ".client.tsx"),
-          )
-          .filter(existsSync),
-        ...(existsSync(pageClientPath) ? [pageClientPath] : []),
-      ];
-      const needsReactImportMap = allClientPaths.some((clientPath) =>
-        clientScriptsUsingReact.has(clientPath),
-      );
-
-      let importMapTag = "";
-      if (needsReactImportMap) {
-        try {
-          const importMapJson = JSON.stringify(
-            await imports(["react-dom/client", "react/jsx-dev-runtime"]),
-          );
-          importMapTag = `<script type="importmap">${importMapJson}</script>`;
-        } catch (error) {
-          console.warn("Failed to generate React import maps:", error);
-        }
-      }
 
       const responseHeaders = {
         "Content-Type": "text/html",
@@ -650,6 +678,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       const wrappedShell = await wrapWithLayouts(
         createElement("tradjs-stream-slot", {}),
         match.route.layouts,
+        pathname,
       );
       resetHead();
       const shellHtmlOnly = await httpMeasure.measure(
@@ -742,6 +771,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
             const wrappedError = await wrapWithLayouts(
               createElement(ErrorComponent, errorProps),
               match.route.layouts,
+              pathname,
             );
 
             const errorHtml = await renderServerTree(
