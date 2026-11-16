@@ -1,578 +1,466 @@
 ---
 name: tradjs
-description: Bun-native web framework with file routing. Use this for building server-rendered pages with client mount scripts for interactivity.
+description: Use when building or modifying Bun-first web applications with server-rendered JSX, file-based routing, API routes, native navigation, and explicit client interactivity without React or hydration.
 ---
 
-# TradJS — Framework Skill
+# TradJS — Agent Coding Skill
 
-TradJS is a Bun-native web framework. Pages are server-rendered JSX, client interactivity is added via **mount scripts** — `.client.tsx` files compiled to lightweight VNodes with a ~2KB reconciler runtime.
+TradJS is a Bun-first web framework for server-rendered JSX, file-based routing, API endpoints, static site generation (SSG), and explicit browser interactivity.
 
-**Current version: 2.5.8**
+**Package:** `tradjs` (npm 4.5.1)
 
----
+**Runtime:** Bun
 
-## 1. When to Use TradJS
+**Important version note:** This skill also documents recent router changes on the development branch that are not yet released in npm 4.5.1. These include layout `pathname` props, complete SSG asset injection, middleware before cached SSG responses, and ordered client initialization before first paint. Code using these features requires the updated branch until they are published.
 
-Use TradJS when the user wants:
-- Server-rendered HTML pages with file-based routing (Next.js App Router style)
-- Client-side interactivity WITHOUT a full SPA framework (no React on the client)
-- CSS styling (Tailwind CSS v4 or vanilla CSS)
-- API endpoints alongside pages
-- View Transitions for app-like navigation
-- Lightweight client bundles (zero React, zero framework overhead)
-- Static Site Generation (SSG) for pre-rendered pages
+## 1. Mental Model
 
-TradJS replaces the full Next.js / Vite stack — server pages, API routes, SSG, and client interactivity — with zero React on the client.
+**Render HTML on the server, mount interactivity explicitly, and let the browser handle navigation.**
 
----
+- **Server pages:** `page.tsx` returns JSX rendered to HTML. Async pages and layouts are supported.
+- **Client scripts:** `page.client.tsx` and `layout.client.tsx` export a default mount function. They add behavior to the delivered document.
+- **Client rendering:** Import `render()` from `tradjs/client`. Calling it explicitly reconciles JSX against a DOM container.
+- **Navigation:** Use ordinary `<a href>` links or `window.location.assign()`. Every navigation loads a new document.
+- **View Transitions:** Cross-document View Transitions are enabled by default. Supporting browsers animate native navigation; others navigate normally.
+- **No hydration:** Server-rendered JSX is not hydrated into a React-style application.
+- **No SPA router:** TradJS does not intercept navigation, preserve mounted layouts between documents, or maintain client state across routes.
+- **No React dependency:** JSX uses TradJS's own runtime. React hooks and React-specific patterns are not required.
+
+Client components are synchronous. State and repaint decisions are explicit.
+
+Do not invent framework APIs or assume Next.js, React, or SPA lifecycle semantics.
 
 ## 2. Project Setup
 
-### New Project (from scratch)
+Requires Bun.
 
 ```bash
-mkdir my-app && cd my-app
+mkdir my-app
+cd my-app
 bun init -y
 bun add tradjs
-```
-
-Create `server.ts`:
-
-```ts
-import { serve } from 'tradjs';
-
-await serve({
-    port: parseInt(process.env.BUN_PORT || "3000"),
-    defaultTitle: 'My App',
-});
+mkdir app
 ```
 
 Create `tsconfig.json`:
 
 ```json
 {
-    "compilerOptions": {
-        "jsx": "react-jsx",
-        "jsxImportSource": "tradjs/client",
-        "target": "ESNext",
-        "module": "ESNext",
-        "moduleResolution": "bundler",
-        "strict": true,
-        "noEmit": true,
-        "skipLibCheck": true
-    },
-    "include": ["app/**/*"]
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "tradjs/client",
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["app/**/*"]
 }
 ```
 
-> **Critical**: `"jsxImportSource": "tradjs/client"` is required. This tells TypeScript and Bun to use TradJS's VDOM runtime for JSX instead of React.
+**Critical:** Both JSX settings are required. They select TradJS's JSX runtime instead of React.
 
-### Within the TradJS monorepo
+Start the application:
 
-When building examples inside the `tradjs` repo, import from local source:
-
-```ts
-// server.ts (inside examples/)
-import { start } from '../../src/web';
+```bash
+bunx tradjs serve
 ```
 
-And use `paths` in `tsconfig.json`:
+Alternative scaffolding:
 
-```json
-{
-    "compilerOptions": {
-        "paths": {
-            "tradjs/client/*": ["../../src/client/*"],
-            "tradjs/*": ["../../src/*"]
-        }
-    }
-}
+```bash
+bunx tradjs init my-app
+cd my-app
+bun run dev
 ```
 
----
+The server requires Bun. `tradjs build` compiles assets; it does not generate a standalone deployment server or export a complete static HTML site.
 
-## 3. File Structure & Routing
+## 3. File Conventions
 
-```
-my-app/
-├── app/
-│   ├── layout.tsx              # Root layout (wraps all pages)
-│   ├── layout.client.tsx       # Persistent client mount script
-│   ├── globals.css             # Global styles (auto-discovered)
-│   ├── page.tsx                # Home page (/)
-│   ├── page.client.tsx         # Home page mount script
-│   ├── page.css                # Scoped CSS for home page
-│   ├── middleware.ts           # Root middleware
-│   ├── error.tsx               # Error boundary
-│   ├── about/
-│   │   └── page.tsx            # /about
-│   ├── post/[id]/
-│   │   ├── page.tsx            # /post/:id (dynamic route)
-│   │   └── page.client.tsx     # Client interactivity for post
-│   └── api/
-│       └── messages/
-│           └── route.ts        # API: GET/POST /api/messages
-├── server.ts
-├── tsconfig.json
-└── package.json
-```
+TradJS discovers routes and supporting files under `app/`.
 
-### Routing Rules
-
-| File Pattern | URL | Type |
-|---|---|---|
-| `app/page.tsx` | `/` | Page |
-| `app/about/page.tsx` | `/about` | Page |
-| `app/post/[id]/page.tsx` | `/post/:id` | Dynamic page |
-| `app/api/messages/route.ts` | `/api/messages` | API route |
-| `app/layout.tsx` | — | Layout (wraps children) |
-| `app/middleware.ts` | — | Runs before page render |
-| `app/error.tsx` | — | Catches render errors |
-
-### Auto-discovered files
-
-- `globals.css`, `global.css`, or `app.css` → processed with PostCSS + Tailwind v4
-- `page.css` or `style.css` → scoped CSS for that route segment
-- `layout.tsx` → layout wrapping child pages (nested layouts compose automatically)
-- `layout.client.tsx` → persistent client mount (survives navigations)
-- `page.client.tsx` → per-page transient client mount
-- `middleware.ts` → runs root→leaf before page render
-- `error.tsx` → catches render errors with full layout chrome
-
----
-
-## 4. Server Pages (`page.tsx`)
-
-Pages run on the server. They can access databases, read files, anything server-side. They return JSX rendered to HTML via `renderToString`.
-
-```tsx
-// app/page.tsx
-export default function Page() {
-    return (
-        <div>
-            <h1>Welcome</h1>
-            <p>Server-rendered at {new Date().toISOString()}</p>
-            <div id="app-root" />
-        </div>
-    );
-}
-```
-
-**Important patterns:**
-- Place `id=""` attributes on containers that client scripts will target
-- Server pages render HTML — client scripts add interactivity
-
----
-
-## 5. Layouts (`layout.tsx`)
-
-Root layout wraps all pages. Must include `{children}`.
-
-```tsx
-// app/layout.tsx
-export default function RootLayout({ children }: { children: any }) {
-    return (
-        <html lang="en">
-            <head>
-                <meta charSet="utf-8" />
-                <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <title>My App</title>
-            </head>
-            <body>
-                <nav><a href="/">Home</a> | <a href="/about">About</a></nav>
-                <main id="melina-page-content">{children}</main>
-            </body>
-        </html>
-    );
-}
-```
-
-**Key points:**
-- `{children}` is where the current page renders
-- `id="melina-page-content"` enables targeted page swaps during navigation
-- Nested layouts compose automatically — place `layout.tsx` in any subdirectory
-
----
-
-## 6. `<Head>` Component
-
-Declarative per-page `<head>` management:
-
-```tsx
-// app/features/about/page.tsx
-import { Head } from 'melina/web';
-
-export default function AboutPage() {
-    return (
-        <>
-            <Head>
-                <title>About Us — My App</title>
-                <meta name="description" content="Learn about our team" />
-                <link rel="canonical" href="https://example.com/about" />
-            </Head>
-            <main><h1>About Us</h1></main>
-        </>
-    );
-}
-```
-
-Head elements are collected during SSR and injected into `<head>`.
-
----
-
-## 7. Client Architecture (`page.client.tsx`)
-
-Melina uses a **pure VDOM architecture** for client interactivity. No hooks, no signals. Call `render(vnode, container)` to update the UI.
-
-### Mount Script Pattern
-
-```tsx
-// app/counter/page.client.tsx
-import { render } from 'melina/client';
-
-function Counter({ count, onIncrement }: { count: number; onIncrement: () => void }) {
-    return (
-        <div>
-            <span>Count: {count}</span>
-            <button onClick={onIncrement}>+1</button>
-        </div>
-    );
-}
-
-export default function mount() {
-    const root = document.getElementById('counter-root');
-    if (!root) return;
-
-    let count = 0;
-    const update = () => {
-        render(<Counter count={count} onIncrement={() => { count++; update(); }} />, root);
-    };
-    update();
-
-    // Cleanup — called when navigating away
-    return () => render(null, root);
-}
-```
-
-### Mount Script Lifecycle
-
-| File | Lifecycle | Use Case |
-|---|---|---|
-| `page.client.tsx` | Mounts on page load, unmounts on navigate away | Page-specific interactions |
-| `layout.client.tsx` | Mounts once, survives across navigations | Global widgets, persistent state |
-
-Both must `export default function mount()`:
-- Called when the script enters the DOM
-- Return value is a cleanup function, called on unmount
-- Uses `render(vnode, container)` to mount/update content
-
-### Pluggable Reconciler
-
-Three diffing strategies:
-1. **Keyed diff** — O(n log n) via LIS for list reorders
-2. **Sequential diff** — O(n) linear patch for static layouts
-3. **Replace** — Full replace (baseline)
-
-```ts
-import { setReconciler } from 'melina/client';
-
-setReconciler('auto');        // Default — inspects children for keys
-setReconciler('keyed');       // Best for dynamic lists
-setReconciler('sequential');  // Best for static layouts
-```
-
-| Use Case | Strategy |
+| File | Purpose |
 |---|---|
-| Dynamic lists with reorder | `keyed` |
-| Static forms, fixed layouts | `sequential` |
-| Large lists (1000+) | `keyed` |
-| Not sure | `auto` (default) |
+| `app/page.tsx` | Server-rendered `/` page |
+| `app/about/page.tsx` | Server-rendered `/about` page |
+| `app/items/[id]/page.tsx` | Dynamic `/items/:id` page; receives `params` |
+| `app/layout.tsx` | Root layout containing `{children}` |
+| `app/docs/layout.tsx` | Nested layout wrapping descendant pages |
+| `app/page.client.tsx` | Browser mount script for the corresponding page |
+| `app/layout.client.tsx` | Browser mount script for the corresponding layout |
+| `app/about/page.css` | Automatically injected, route-scoped CSS |
+| `app/globals.css` | Automatically discovered global CSS |
+| `app/middleware.ts` | Middleware applied to matching routes |
+| `app/admin/error.tsx` | Server-rendering error boundary |
+| `app/api/hello/route.ts` | API handlers for `/api/hello` |
 
----
+Other supported global stylesheet names are `global.css` and `app.css`.
 
-## 8. API Routes (`route.ts`)
+Route groups `(group)` and catch-all segments `[...name]` are supported.
 
-Export named HTTP method handlers:
+Nested layouts compose from root to leaf. Layouts are rendered for each document request, not persisted across navigation.
+
+**Only `page.css` is automatically route-scoped.** Do not treat `style.css` as an equivalent convention.
+
+## 4. Correct Package Imports
+
+Use only public package exports.
+
+| Import | Purpose |
+|---|---|
+| `tradjs` | `start`, `serve`, `createAppRouter`, server APIs |
+| `tradjs/web` | Web server APIs, including `cors` |
+| `tradjs/server` | `Head`, SSR renderers, SSG and build utilities |
+| `tradjs/server/ssr` | Server-side rendering utilities |
+| `tradjs/server/build` | Asset-building utilities |
+| `tradjs/server/router` | Router utilities |
+| `tradjs/server/serve` | Server utilities |
+| `tradjs/server/imports` | Server import utilities |
+| `tradjs/client` | `render`, `h`, `createElement`, `Fragment`, `memo`, reconciler APIs |
+| `tradjs/client/render` | Client rendering utilities |
+| `tradjs/client/types` | Client JSX and VNode types |
+| `tradjs/client/reconcilers` | Reconciliation utilities |
+| `tradjs/client/jsx-runtime` | Automatic JSX runtime |
+| `tradjs/client/jsx-dev-runtime` | Development JSX runtime |
+| `tradjs/client/jsx-dom` | DOM JSX utilities |
+
+The JSX runtime is selected by `tsconfig.json`; do not normally import it manually.
+
+Typical imports:
+
+```tsx
+import { render, memo } from "tradjs/client";
+import { Head, renderToStringAsync } from "tradjs/server";
+import { createAppRouter } from "tradjs";
+```
+
+**Never use:**
+
+- `melina`, `melina/web`, `melina/client`, or other `melina/*` imports.
+- `navigate` or `Link` from `tradjs/client`; these exports do not exist.
+- Undocumented deep imports that are absent from `package.json` exports.
+- React hooks or React hydration APIs as substitutes for TradJS's client rendering.
+
+Keep server-only modules out of browser mount scripts.
+
+## 5. Six Correct Examples
+
+### Example 1 — Server Page + API Route
+
+`app/page.tsx`:
+
+```tsx
+export default async function HomePage() {
+  const message = await Promise.resolve("Hello from TradJS");
+
+  return (
+    <main>
+      <h1>{message}</h1>
+      <div id="counter-root" />
+      <a href="/api/hello">Open the JSON API</a>
+    </main>
+  );
+}
+```
+
+`app/api/hello/route.ts`:
 
 ```ts
-// app/api/messages/route.ts
-export async function GET(req: Request) {
-    return Response.json([{ id: 1, text: 'Hello' }]);
+export function GET(_req: Request) {
+  return Response.json({
+    message: "Hello from the API",
+    ok: true,
+  });
 }
 
 export async function POST(req: Request) {
-    const body = await req.json();
-    return Response.json({ ok: true });
+  const data = await req.json();
+  return Response.json({ received: data });
 }
 ```
 
-### Streaming (SSE)
+Pages may be async. TradJS awaits server rendering before constructing the response; it does not progressively stream async component output.
 
-Return an `AsyncGenerator` for Server-Sent Events:
+When a page tree includes an async component, declare the page `async`. Async layouts similarly enable async rendering within their layout tree.
 
-```ts
-// app/api/stream/route.ts
-export async function* GET(req: Request) {
-    for (let i = 0; i < 10; i++) {
-        yield `data: ${JSON.stringify({ count: i })}\n\n`;
-        await new Promise(r => setTimeout(r, 1000));
-    }
-}
-```
+API routes export named HTTP method handlers. A default export can act as a fallback. Dynamic API routes receive `params` in the second handler argument.
 
----
+Return `Response.json()` for JSON, and a `Response` containing a `ReadableStream` for streaming.
 
-## 9. Middleware (`middleware.ts`)
+**Never return an async generator directly from an API route.** The app router JSON-serializes non-`Response` return values.
 
-Middleware functions run before page rendering, root→leaf:
+### Example 2 — Layout with Current Navigation Link
 
-```ts
-// app/middleware.ts
-export default async function middleware(req: Request) {
-    const token = req.headers.get('authorization');
-    if (!token) {
-        return new Response('Unauthorized', { status: 401 });
-    }
-    // Return nothing to continue to the page
-}
-```
-
----
-
-## 10. Error Boundaries (`error.tsx`)
-
-Catches render errors and displays them with full layout chrome:
+`app/layout.tsx`:
 
 ```tsx
-// app/error.tsx
-export default function ErrorPage({ error }: { error: { message: string; stack?: string } }) {
-    return (
-        <div style={{ padding: '40px', color: '#ef4444' }}>
-            <h1>Something went wrong</h1>
-            <pre>{error.message}</pre>
-        </div>
-    );
+export default function Layout({
+  children,
+  pathname,
+}: {
+  children: any;
+  pathname: string;
+}) {
+  return (
+    <html lang="en">
+      <head>
+        <meta charSet="utf-8" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1"
+        />
+        <title>My TradJS App</title>
+      </head>
+      <body>
+        <nav>
+          <a
+            href="/"
+            aria-current={pathname === "/" ? "page" : undefined}
+          >
+            Home
+          </a>
+          <a
+            href="/about"
+            aria-current={pathname === "/about" ? "page" : undefined}
+          >
+            About
+          </a>
+        </nav>
+        {children}
+      </body>
+    </html>
+  );
 }
 ```
 
----
+`pathname` is supplied to layouts by the updated router branch.
 
-## 11. SSG (Static Site Generation)
+Use it for active-link states rather than assuming layouts persist or subscribe to client-side route changes.
 
-Pre-render pages at startup, serve from memory:
+The root layout must render `{children}` and should provide a normal HTML document containing `<head>` and `<body>`.
 
-```tsx
-// app/pricing/page.tsx
-export const ssg = true;
+### Example 3 — Client Mount Script
 
-export default function PricingPage() {
-    return <main><h1>Pricing</h1></main>;
-}
-```
-
-With TTL (time-to-live):
+`app/page.client.tsx`:
 
 ```tsx
-export const ssg = { revalidate: 60 }; // re-render after 60 seconds
-```
-
-SSG API:
-
-```ts
-import { getPrerendered, setPrerendered, clearSSGCache } from 'melina/server';
-
-// Check if a page is cached
-const html = getPrerendered('/pricing');
-
-// Clear cache (e.g., after content update)
-clearSSGCache('/pricing');
-```
-
----
-
-## 12. Styling
-
-### Tailwind CSS v4
-
-Create `app/globals.css`:
-
-```css
-@import "tailwindcss";
-
-@theme {
-    --color-background: #0a0a0f;
-    --color-surface: #111118;
-    --color-foreground: #e4e4e7;
-    --color-accent: #6366f1;
-}
-```
-
-Melina auto-discovers `globals.css`, `global.css`, or `app.css`.
-
-### Scoped CSS
-
-Place `page.css` or `style.css` alongside a page — auto-injected for that route only.
-
-### Vanilla CSS
-
-You don't need Tailwind — any CSS works. Just use standard stylesheets.
-
----
-
-## 13. Package Exports
-
-| Import Path | Module | Use Case |
-|---|---|---|
-| `melina` | `src/web.ts` | Server: `start`, `serve`, `createAppRouter` |
-| `melina/web` | `src/web.ts` | Same as above |
-| `melina/server` | `src/server/index.ts` | Server: `renderToString`, `Head`, SSG, build helpers |
-| `melina/server/ssr` | `src/server/ssr.ts` | Server: `renderToString` only |
-| `melina/client` | `src/client/index.ts` | Client: `render`, `createElement`, `setReconciler`, `navigate`, `Link` |
-| `melina/client/render` | `src/client/render.ts` | Client: same as above (direct) |
-| `melina/client/types` | `src/client/types.ts` | Types: `VNode`, `Props`, `Component` |
-| `melina/client/reconcilers` | `src/client/reconcilers/index.ts` | Reconciler strategies |
-| `melina/client/jsx-runtime` | `src/client/jsx-runtime.ts` | JSX transform (auto, don't import manually) |
-| `melina/client/jsx-dom` | `src/client/jsx-dom.ts` | Real DOM JSX factory |
-
-### Architecture: SSR vs Client separation
-
-- **Client bundles** (`src/client/`) are bundled for the browser — no server code
-- **SSR** (`renderToString`) lives at `src/server/ssr.ts` — never in client bundles
-- **Server** imports from `melina/server` or `melina/web`
-- **Client mount scripts** import from `melina/client`
-
----
-
-## 14. Server API Reference
-
-### `start(options)` — Quick start
-
-```ts
-import { start } from 'melina';
-
-await start({
-    appDir: './app',                    // default: './app'
-    port: 3000,                         // default: 3000 or BUN_PORT env
-    defaultTitle: 'My App',
-});
-```
-
-### `serve(handler, options)` + `createAppRouter(options)` — Advanced
-
-```ts
-import { serve, createAppRouter } from 'melina';
-
-const router = createAppRouter({
-    appDir: './app',
-    defaultTitle: 'My App',
-    globalCss: './app/globals.css',
-});
-
-serve(router, { port: 3000 });
-```
-
-### Build Helpers
-
-```ts
-import { buildScript, buildStyle, buildAsset } from 'melina/server';
-
-const scriptUrl = await buildScript('./src/app.ts');     // JS/TS → hashed URL
-const cssUrl = await buildStyle('./src/style.css');       // CSS → processed URL
-const imgUrl = await buildAsset(Bun.file('./icon.png')); // Static → hashed URL
-```
-
----
-
-## 15. Common Patterns
-
-### Event Delegation for Lists
-
-For dynamic lists, use `data-*` attributes with delegated event handlers:
-
-```tsx
-// In page.client.tsx
-document.addEventListener('click', (e) => {
-    const btn = (e.target as HTMLElement).closest('[data-item-id]');
-    if (btn) {
-        const id = (btn as HTMLElement).dataset.itemId;
-        selectItem(id);
-    }
-});
-
-// In component
-function Item({ item }: { item: { id: string; name: string } }) {
-    return <button data-item-id={item.id}>{item.name}</button>;
-}
-```
-
-### Persistent Floating Widget
-
-```tsx
-// layout.client.tsx — survives across navigations
-import { render } from 'melina/client';
+import { render } from "tradjs/client";
 
 export default function mount() {
-    const root = document.getElementById('widget-root');
-    if (!root) return;
+  const root = document.getElementById("counter-root");
+  if (!root) return;
 
-    let isOpen = false;
-    const update = () => render(
-        <div>
-            {isOpen && <div className="widget-panel">Widget content</div>}
-            <button onClick={() => { isOpen = !isOpen; update(); }}>
-                {isOpen ? '✕' : '?'}
-            </button>
-        </div>,
-        root
+  let count = 0;
+
+  function paint() {
+    render(
+      <button
+        onClick={() => {
+          count++;
+          paint();
+        }}
+      >
+        Count: {count}
+      </button>,
+      root,
     );
-    update();
-    return () => render(null, root);
+  }
+
+  paint();
 }
 ```
 
-### Client-Side Navigation
+The matching server page provides `<div id="counter-root" />`.
+
+The framework discovers and executes the default-exported mount function.
+
+`render()` reconciles successive VNodes with the existing DOM. State updates require explicit repaint calls.
+
+A `layout.client.tsx` follows the same pattern, but belongs to its layout.
+
+**Mount lifecycle:**
+
+- On the updated router, client bootstrap is injected in `<head>` with `blocking="render"`.
+- Client initializers execute in layout-then-page order before first paint.
+- Each document navigation starts a new lifecycle.
+- Layout client scripts do not survive navigation.
+- Returned cleanup functions are not invoked by the router.
+
+For cleanup within a document, manage event listeners and resources explicitly. Use appropriate browser lifecycle events when necessary.
+
+Do not rely on a returned `() => cleanup()` function.
+
+### Example 4 — Static Site Generation
+
+`app/pricing/page.tsx`:
+
+```tsx
+export const ssg = { revalidate: 60 };
+
+export default function PricingPage() {
+  return (
+    <main>
+      <h1>Pricing</h1>
+      <p>Public pricing information.</p>
+    </main>
+  );
+}
+```
+
+Use `export const ssg = true` for an entry without a configured expiration.
+
+SSG prerenders eligible static routes at production startup and caches the HTML in memory.
+
+`revalidate` specifies expiration in seconds. After expiration, the current router falls back to regular SSR rather than automatically repopulating the cache.
+
+On the updated branch:
+
+- Cached SSG responses include the normal client bootstrap scripts and `page.css`.
+- Middleware runs before cached SSG responses are served.
+
+SSG is not static HTML export. Avoid caching personalized or user-specific HTML.
+
+### Example 5 — Middleware Authentication
+
+`app/api/private/middleware.ts`:
 
 ```ts
-import { navigate } from 'melina/client';
+export default function middleware(req: Request) {
+  const expected = Bun.env.PRIVATE_API_TOKEN;
 
-// Programmatic navigation with View Transitions
-navigate('/dashboard');
+  if (
+    !expected ||
+    req.headers.get("authorization") !== `Bearer ${expected}`
+  ) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+}
 ```
 
----
+This example protects an API route segment using a server-configured bearer token. For browser pages, use validated session cookies or equivalent server-side session authentication.
 
-## 16. Gotchas & Troubleshooting
+Middleware runs root-to-leaf before route processing.
 
-### ❌ `async` Server Components
+Return a `Response` to stop processing. Return nothing to continue.
 
-Melina's `renderToString` does NOT support `async` server components.
+**Updated router behavior:** Middleware also runs before cached SSG responses. Protect restricted SSG routes with middleware; do not assume prerendering performs request-time authentication.
 
-- **Wrong**: `export default async function Page() { ... }`
-- **Right**: `export default function Page() { ... }`
+Authorization must not rely solely on client scripts.
 
-If you need async data, fetch it before the component renders and pass it as props.
+### Example 6 — Automatically Scoped CSS
 
-### ❌ Missing `mount()` export
+`app/about/page.tsx`:
 
-Client scripts MUST `export default function mount()`. Without this, no interactivity.
-
-### ❌ CSS 404
-
-Melina auto-maps `app/globals.css` → `/globals.css`. Don't use custom paths in `<link>` tags.
-
-### ❌ Ghost Processes (EADDRINUSE)
-
-On Windows, stale Bun processes may hold ports:
-
-```powershell
-netstat -ano | findstr ":3000"
-taskkill /F /PID <PID>
+```tsx
+export default function AboutPage() {
+  return (
+    <main>
+      <article className="card">
+        <h1>About</h1>
+      </article>
+    </main>
+  );
+}
 ```
 
-### ❌ Stale Dependencies
+`app/about/page.css`:
 
-After switching package versions or linking locally:
+```css
+.card {
+  padding: 1rem;
+  border: 1px solid #ddd;
+  border-radius: 12px;
+}
 
-```powershell
-Remove-Item -Recurse -Force node_modules, bun.lock; bun install
+.card > h1 {
+  margin: 0;
+}
 ```
+
+TradJS discovers `page.css`, processes it, scopes its selectors using the route's `body[data-page]` attribute, and includes it automatically.
+
+Do not manually import or link `page.css`.
+
+Use `globals.css`, `global.css`, or `app.css` for application-wide styles.
+
+CSS Modules (`*.module.css`) are supported through imports in client bundles only.
+
+## 6. Navigation Rules
+
+Use native browser navigation:
+
+```tsx
+<a href="/about">About</a>
+```
+
+Or:
+
+```ts
+window.location.assign("/about");
+window.location.replace("/about");
+```
+
+Do not use `navigate()`, `<Link>`, an imaginary navigation hook, or SPA router conventions.
+
+TradJS enables cross-document View Transitions by default. Supporting browsers animate native document navigation.
+
+To disable the feature:
+
+```ts
+import { createAppRouter } from "tradjs";
+
+const router = createAppRouter({
+  viewTransitions: false,
+});
+```
+
+In-memory client state resets across document navigations. Persist necessary state using URLs, browser storage, cookies, or server sessions.
+
+## 7. Critical Pitfalls
+
+1. **Inline `<style>` content is HTML-escaped.** CSS combinators such as `>` can become escaped text and break selectors. Prefer `page.css` or an external stylesheet instead of putting CSS rules inside JSX `<style>` elements.
+
+2. **Async server rendering is supported.** An `async` page or layout can await data and render async descendants. A synchronous page cannot render an async child component. Async SSR is awaited, not progressively streamed.
+
+3. **Client components remain synchronous.** Do not render async components through browser `render()`.
+
+4. **SSG authentication requires middleware.** On the updated branch, middleware runs before cached SSG responses. Cached HTML must still avoid personalized data.
+
+5. **SSG assets are included on the updated branch.** Prerendered pages receive the normal client scripts and route-scoped `page.css`. Do not retain the old limitation claiming otherwise.
+
+6. **CSS Modules are client-bundle-only.** Use `page.css` for automatically scoped server-page styles.
+
+7. **Client initialization is ordered.** The updated bootstrap runs layout initializers before page initializers, using a render-blocking script in `<head>`. Do not add arbitrary timers to compensate for the old initialization timing.
+
+8. **No mount cleanup contract.** Do not return cleanup functions expecting the framework to invoke them on navigation.
+
+9. **No persistent layouts.** Native document navigation reloads the document, layout, and mount scripts.
+
+10. **API streaming requires a `Response`.** An async generator returned directly from a route handler is not treated as an SSE stream.
+
+11. **Use correct package names.** Import from `tradjs` exports, never `melina/*`.
+
+12. **Use `page.css` for route scoping.** `style.css` is not an automatically scoped page stylesheet.
+
+## 8. Agent Checklist
+
+Before producing TradJS code, verify:
+
+- JSX configuration selects `tradjs/client`.
+- Files follow the `app/` routing conventions.
+- Imports use actual public package exports.
+- Server code and browser mount code remain separate.
+- Async components are used only within appropriately async server trees.
+- Client interactivity uses a default-exported mount function and explicit `render()`.
+- Links use native browser navigation.
+- Client state is not assumed to persist across routes.
+- Route CSS is placed in `page.css`.
+- API handlers return valid `Response` objects when streaming.
+- Authenticated routes enforce access on the server.
+- Branch-only router features are available in the target TradJS installation.
+
+**Default implementation strategy:** Write the page in server JSX, add a client mount script only when interactivity is needed, use native links for navigation, and keep authentication and data access on the server.
