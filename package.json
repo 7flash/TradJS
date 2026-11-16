@@ -11,6 +11,8 @@
     "src",
     "bin",
     "README.md",
+    "CHANGELOG.md",
+    "SKILL.md",
     "dist"
   ],
   "exports": {
