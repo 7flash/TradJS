@@ -19,6 +19,7 @@
 - Text inside `<style>` and `<script>` elements is no longer HTML-escaped, so CSS selectors and JavaScript retain their intended content. Embedded closing tags are neutralized to prevent premature element termination.
 - Client scripts are now correctly discovered for `.js` and `.jsx` routes.
 - The client renderer creates nodes in the container's own document, so rendering into an iframe or another window works.
+- A client render that throws partway (component, ref callback, later child) no longer leaves half-mounted nodes, listeners or refs behind; the container keeps its previous content and the next `render()` works.
 - Expected view-transition cancellations, including `AbortError` and `TimeoutError` skips, no longer trigger the client error overlay. Unrelated errors remain visible.
 - The 404 page now includes a mobile viewport declaration.
 - The showcase reconnects its event stream after back/forward cache restoration and keeps previously displayed events.
