@@ -541,19 +541,6 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       });
     }
 
-    if (!isDev && match.route.type === "page") {
-      const cached = getPrerendered(pathname);
-      if (cached) {
-        return new Response(cached, {
-          headers: {
-            "Content-Type": "text/html",
-            "Cache-Control": "public, max-age=3600",
-            "X-TradJS-SSG": "1",
-          },
-        });
-      }
-    }
-
     try {
       if (match.route.middlewares.length > 0) {
         for (const mwPath of match.route.middlewares) {
@@ -580,6 +567,25 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
             },
           );
           if (mwResult instanceof Response) return mwResult;
+        }
+      }
+
+      // Prerendered pages are served only after middleware has run, so an
+      // auth check in middleware also guards SSG pages. Behind middleware the
+      // response may depend on the user: keep it out of shared caches.
+      if (!isDev && match.route.type === "page") {
+        const cached = getPrerendered(pathname);
+        if (cached) {
+          return new Response(cached, {
+            headers: {
+              "Content-Type": "text/html",
+              "Cache-Control":
+                match.route.middlewares.length > 0
+                  ? "private, max-age=3600"
+                  : "public, max-age=3600",
+              "X-TradJS-SSG": "1",
+            },
+          });
         }
       }
 

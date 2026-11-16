@@ -53,6 +53,51 @@ describe("router HTML for mobile navigation", () => {
   });
 });
 
+describe("SSG behind middleware", () => {
+  test("a prerendered page is not served before middleware has run", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "tradjs-ssg-mw-"));
+    try {
+      writeFileSync(
+        path.join(dir, "page.jsx"),
+        `export const ssg = true;\nexport default function Page() { return "members only"; }\n`,
+      );
+      writeFileSync(
+        path.join(dir, "middleware.ts"),
+        `export default function (req) {\n` +
+          `  if (req.headers.get("x-user") !== "ok") return new Response("denied", { status: 401 });\n}\n`,
+      );
+      const script = `
+        const { createAppRouter } = await import(${JSON.stringify(path.join(import.meta.dir, "..", "src", "server", "app-router.ts"))});
+        const handler = createAppRouter({ appDir: ${JSON.stringify(dir)}, defaultTitle: "Test" });
+        let allowed;
+        for (let i = 0; i < 100; i++) {
+          allowed = await handler(new Request("http://localhost/", { headers: { "x-user": "ok" } }));
+          if (allowed.headers.get("X-TradJS-SSG") === "1") break;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        const denied = await handler(new Request("http://localhost/"));
+        console.log(JSON.stringify({
+          ssg: allowed.headers.get("X-TradJS-SSG"),
+          cache: allowed.headers.get("Cache-Control"),
+          deniedStatus: denied.status,
+          deniedBody: await denied.text(),
+        }));
+      `;
+      const proc = Bun.spawnSync(["bun", "-e", script], {
+        cwd: path.join(import.meta.dir, ".."),
+        env: { ...process.env, NODE_ENV: "production" },
+      });
+      const result = JSON.parse(proc.stdout.toString().trim().split("\n").pop()!);
+      expect(result.ssg).toBe("1");
+      expect(result.deniedStatus).toBe(401);
+      expect(result.deniedBody).toBe("denied");
+      expect(result.cache).toContain("private");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
 describe("SSG output keeps client assets", () => {
   test("a prerendered page with page.client.tsx carries the same bootstrap as a dynamic render", async () => {
     // SSG runs only in production, decided when the router module loads.
