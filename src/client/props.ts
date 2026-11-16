@@ -1,5 +1,10 @@
 import { assignElementStyle, domAttributeName, setElementClass } from "./dom";
-import { attributeValue, isSafeHtmlName } from "../shared/attributes";
+import {
+  attributeValue,
+  isEventProp,
+  isSafeHtmlName,
+  isUnsafeUrlAttribute,
+} from "../shared/attributes";
 export function eventDescriptor(key: string): {
   type: string;
   capture: boolean;
@@ -28,7 +33,14 @@ export function isFormStateProp(el: Element, key: string): boolean {
   );
 }
 export function setDomProp(el: Element, key: string, value: unknown): void {
-  if (!isSafeHtmlName(key)) return;
+  if (!isSafeHtmlName(key) || isEventProp(key)) return;
+  const name = domAttributeName(el, key);
+  if (!isSafeHtmlName(name) || isEventProp(name)) return;
+  if (name.toLowerCase() === "srcdoc" || isUnsafeUrlAttribute(name, value)) {
+    // Same rule as server rendering; also drop a value set by an earlier render.
+    el.removeAttribute(name);
+    return;
+  }
   if (key === "className" || key === "class") {
     setElementClass(el, value);
     return;
@@ -62,7 +74,6 @@ export function setDomProp(el: Element, key: string, value: unknown): void {
   ) {
     (el as unknown as Record<string, unknown>)[key] = Boolean(value);
   }
-  const name = domAttributeName(el, key);
   const serialized = attributeValue(name, value);
   if (serialized === null) el.removeAttribute(name);
   else el.setAttribute(name, serialized);
