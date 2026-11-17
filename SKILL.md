@@ -7,11 +7,11 @@ description: Use when building or modifying Bun-first web applications with serv
 
 TradJS is a Bun-first web framework for server-rendered JSX, file-based routing, API endpoints, static site generation (SSG), and explicit browser interactivity.
 
-**Package:** `tradjs` (npm 4.5.1)
+**Package:** `tradjs` (npm 4.6.0)
 
 **Runtime:** Bun
 
-**Important version note:** This skill also documents recent router changes on the development branch that are not yet released in npm 4.5.1. These include layout `pathname` props, complete SSG asset injection, middleware before cached SSG responses, and ordered client initialization before first paint. Code using these features requires the updated branch until they are published.
+**Version note:** This skill documents the 4.6.0 behavior. Do not assume older 4.5.x installations have the security protections, API method handling, CSS Modules support, or SSG behavior described here.
 
 ## 1. Mental Model
 
@@ -106,6 +106,8 @@ Nested layouts compose from root to leaf. Layouts are rendered for each document
 
 **Only `page.css` is automatically route-scoped.** Do not treat `style.css` as an equivalent convention.
 
+**Route matching uses decoded paths.** Paths are decoded once per segment and trailing slashes are normalized before matching. Encoded slashes, backslashes, control characters, dot segments, malformed encoding, and double encoding are rejected with 404. Do not depend on matching against the original percent-encoded path.
+
 ## 4. Correct Package Imports
 
 Use only public package exports.
@@ -191,6 +193,14 @@ API routes export named HTTP method handlers. A default export can act as a fall
 
 Return `Response.json()` for JSON, and a `Response` containing a `ReadableStream` for streaming.
 
+API method handling also provides these behaviors:
+
+- `HEAD` is handled using `GET` when no explicit `HEAD` handler is exported. The response has no body.
+- `OPTIONS` returns `204` with an `Allow` header when no explicit `OPTIONS` handler is exported.
+- An unsupported method returns `405` with an `Allow` header.
+
+Export your own `HEAD` or `OPTIONS` handler when the route needs custom behavior.
+
 **Never return an async generator directly from an API route.** The app router JSON-serializes non-`Response` return values.
 
 ### Example 2 — Layout with Current Navigation Link
@@ -237,9 +247,11 @@ export default function Layout({
 }
 ```
 
-`pathname` is supplied to layouts by the updated router branch.
+Layouts receive a `pathname` property from the router.
 
 Use it for active-link states rather than assuming layouts persist or subscribe to client-side route changes.
+
+During SSG prerendering, `pathname` contains the route pattern, not a concrete parameterized pathname.
 
 The root layout must render `{children}` and should provide a normal HTML document containing `<head>` and `<body>`.
 
@@ -284,8 +296,9 @@ A `layout.client.tsx` follows the same pattern, but belongs to its layout.
 
 **Mount lifecycle:**
 
-- On the updated router, client bootstrap is injected in `<head>` with `blocking="render"`.
-- Client initializers execute in layout-then-page order before first paint.
+- Client bootstrap is injected in `<head>` with `blocking="render"`.
+- Client initializers execute in layout-then-page order, awaiting each in order before first paint.
+- A failed initializer prevents dependent initializers from running.
 - Each document navigation starts a new lifecycle.
 - Layout client scripts do not survive navigation.
 - Returned cleanup functions are not invoked by the router.
@@ -313,16 +326,17 @@ export default function PricingPage() {
 
 Use `export const ssg = true` for an entry without a configured expiration.
 
-SSG prerenders eligible static routes at production startup and caches the HTML in memory.
+SSG prerenders eligible static routes and caches the HTML.
 
-`revalidate` specifies expiration in seconds. After expiration, the current router falls back to regular SSR rather than automatically repopulating the cache.
+`revalidate` specifies the cache lifetime in seconds. After expiration, the page is regenerated automatically on a subsequent request. Concurrent requests that need the same regeneration share a single regeneration operation.
 
-On the updated branch:
+Public SSG responses use a cache `max-age` matching the `revalidate` setting, defaulting to 3600 seconds.
 
-- Cached SSG responses include the normal client bootstrap scripts and `page.css`.
+- SSG responses include the normal client bundles, initialization scripts, import maps, and route-scoped stylesheets.
 - Middleware runs before cached SSG responses are served.
+- Middleware-protected SSG responses use `Cache-Control: no-store` and are not stored as public cached responses.
 
-SSG is not static HTML export. Avoid caching personalized or user-specific HTML.
+SSG is not static HTML export. Avoid putting personalized or user-specific HTML in public SSG pages.
 
 ### Example 5 — Middleware Authentication
 
@@ -347,7 +361,11 @@ Middleware runs root-to-leaf before route processing.
 
 Return a `Response` to stop processing. Return nothing to continue.
 
-**Updated router behavior:** Middleware also runs before cached SSG responses. Protect restricted SSG routes with middleware; do not assume prerendering performs request-time authentication.
+**Middleware runs before cached SSG responses.** Protect restricted SSG routes with middleware; do not assume prerendering performs request-time authentication.
+
+Middleware-protected SSG responses are not stored and use `Cache-Control: no-store`.
+
+Dynamic SSR pages also use `Cache-Control: no-store`. Do not assume dynamic HTML can be stored in a shared cache.
 
 Authorization must not rely solely on client scripts.
 
@@ -387,7 +405,7 @@ Do not manually import or link `page.css`.
 
 Use `globals.css`, `global.css`, or `app.css` for application-wide styles.
 
-CSS Modules (`*.module.css`) work through imports in server-rendered components and client bundles alike.
+CSS Modules (`*.module.css`) work through imports in server-rendered pages, layouts, and components, as well as client bundles. They produce the same class names in server and client output, and the page links the stylesheets it uses.
 
 ## 6. Navigation Rules
 
@@ -420,31 +438,55 @@ const router = createAppRouter({
 
 In-memory client state resets across document navigations. Persist necessary state using URLs, browser storage, cookies, or server sessions.
 
+**Route matching uses the decoded path.** TradJS decodes each path segment once and normalizes trailing slashes before matching. Encoded slashes, backslashes, control characters, dot segments, malformed encoding, and double encoding return 404. Do not build authorization assumptions around encoded-path distinctions.
+
 ## 7. Critical Pitfalls
 
-1. **Inline `<style>` content is HTML-escaped.** CSS combinators such as `>` can become escaped text and break selectors. Prefer `page.css` or an external stylesheet instead of putting CSS rules inside JSX `<style>` elements.
+1. **SSR validates HTML attributes and tag names.** Unsafe attribute names and values are not passed through unchecked. Event-handler attributes are removed regardless of case. `srcdoc` is rejected. Unsafe URL schemes are dropped from URL-bearing attributes. Title, viewport, and metadata values are escaped.
 
-2. **Async server rendering is supported.** An `async` page or layout can await data and render async descendants. A synchronous page cannot render an async child component. Async SSR is awaited, not progressively streamed.
+2. **The client renderer applies the same attribute and URL protections.** Do not expect a client render to preserve an unsafe URL or `srcdoc` attribute that server rendering would reject.
 
-3. **Client components remain synchronous.** Do not render async components through browser `render()`.
+3. **Unsafe CSS `style` values are dropped.** The server and client both check style values. If a style contains `url(javascript:...)`, `url(vbscript:...)`, or a non-image `data:` URL, the entire `style` attribute is dropped. CSS-escaped spellings of these unsafe URLs are also detected. Raster `data:image/*` backgrounds remain allowed.
 
-4. **SSG authentication requires middleware.** On the updated branch, middleware runs before cached SSG responses. Cached HTML must still avoid personalized data.
+4. **Allowed image data URLs are limited.** Raster `data:image/*` URLs remain permitted in `src`, `srcset`, and `poster`. Do not rely on `javascript:`, `vbscript:`, or other `data:` URLs in URL-bearing attributes. Replace blocked values with safe resources.
 
-5. **SSG assets are included on the updated branch.** Prerendered pages receive the normal client scripts and route-scoped `page.css`. Do not retain the old limitation claiming otherwise.
+5. **`<Head>` uses the same security rules.** It rejects `srcdoc` and executable URLs in addition to the SSR attribute protections. Each page, layout, and SSG render has its own isolated `<Head>` collection; concurrent requests do not share head elements. `renderPage()` collects the `<Head>` elements for its own render.
 
-6. **CSS Modules work on server and client.** `import styles from "./x.module.css"` gives the same class names in server-rendered components and client bundles, and the page links the stylesheet. `page.css` remains the simplest way to scope a whole page.
+6. **Dynamic HTML is not publicly cacheable.** Dynamic SSR responses use `Cache-Control: no-store`. Middleware-protected SSG responses also use `no-store` and are not stored. Public SSG responses use `max-age` matching their `revalidate` setting, defaulting to 3600 seconds.
 
-7. **Client initialization is ordered.** The updated bootstrap runs layout initializers before page initializers, using a render-blocking script in `<head>`. Do not add arbitrary timers to compensate for the old initialization timing.
+7. **Detailed error pages are local-only.** The framework's detailed error page, including message, stack, and details, is shown only to requests from the same machine. This restriction applies even when `NODE_ENV` is not `production`. Do not assume that leaving `NODE_ENV` unset exposes detailed errors remotely.
 
-8. **No mount cleanup contract.** Do not return cleanup functions expecting the framework to invoke them on navigation.
+8. **Production `error.tsx` does not receive raw error messages.** In production, the error boundary receives a generic message and an `error.digest` matching the corresponding server log line. Use the digest to correlate a user-visible error with server logs. Do not expect the original exception message, SQL, file paths, or other internals to be available through the production error prop.
 
-9. **No persistent layouts.** Native document navigation reloads the document, layout, and mount scripts.
+9. **Routes match decoded, normalized paths.** The router decodes each segment once and normalizes trailing slashes before matching. Encoded slashes, backslashes, control characters, dot segments, malformed encoding, and double encoding return 404. Do not depend on the old behavior of matching the encoded URL.
 
-10. **API streaming requires a `Response`.** An async generator returned directly from a route handler is not treated as an SSE stream.
+10. **Raw `<style>` and `<script>` text is preserved.** Text inside these elements is not HTML-escaped, so CSS selectors and JavaScript retain their intended content. Embedded closing tags are neutralized to prevent premature element termination. Do not assume ordinary HTML text escaping is applied inside these elements.
 
-11. **Use correct package names.** Import from `tradjs` exports, never `melina/*`.
+11. **Async server rendering is supported.** An `async` page or layout can await data and render async descendants. A synchronous page cannot render an async child component. Async SSR is awaited, not progressively streamed.
 
-12. **Use `page.css` for route scoping.** `style.css` is not an automatically scoped page stylesheet.
+12. **Client components remain synchronous.** Do not render async components through browser `render()`.
+
+13. **SSG assets are included.** Prerendered pages receive the normal client bundles, initialization scripts, import maps, and route-scoped stylesheets. Interactive components work on SSG pages.
+
+14. **SSG regenerates after expiration.** Expired pages are automatically regenerated on subsequent requests. Concurrent cache misses share one regeneration. Do not retain the old assumption that expiration permanently falls back to dynamic rendering without repopulating the cache.
+
+15. **CSS Modules work on server and client.** `import styles from "./x.module.css"` gives the same class names in server-rendered components and client bundles, and the page links the stylesheets it uses. `page.css` remains the simplest way to scope a whole page.
+
+16. **Client initialization is ordered.** The bootstrap runs layout initializers before the page initializer, awaiting each in order. Bootstrap scripts run from `<head>` with `blocking="render"`, so first paint waits for initialization. A failed initializer prevents dependent initializers from running. Keep initialization work short and ensure initializer promises resolve or reject rather than hanging.
+
+17. **No mount cleanup contract.** Do not return cleanup functions expecting the framework to invoke them on navigation.
+
+18. **No persistent layouts.** Native document navigation reloads the document, layout, and mount scripts.
+
+19. **API streaming requires a `Response`.** An async generator returned directly from a route handler is not treated as an SSE stream.
+
+20. **API method handling is automatic unless overridden.** `HEAD` uses `GET` without a body; `OPTIONS` returns `204` with `Allow` unless the route exports its own `OPTIONS`; unsupported methods return `405` with `Allow`.
+
+21. **Use correct package names.** Import from `tradjs` exports, never `melina/*`.
+
+22. **Use `page.css` for route scoping.** `style.css` is not an automatically scoped page stylesheet.
+
+23. **CLI filesystem paths are restricted.** Builds do not read an automatically discovered `globals.css` through a symlink pointing outside the app, or write through an output directory that is itself a symlink or sits under one. Do not depend on those symlink paths for build inputs or outputs.
 
 ## 8. Agent Checklist
 
@@ -458,9 +500,16 @@ Before producing TradJS code, verify:
 - Client interactivity uses a default-exported mount function and explicit `render()`.
 - Links use native browser navigation.
 - Client state is not assumed to persist across routes.
+- Route matching assumptions use decoded, normalized paths.
 - Route CSS is placed in `page.css`.
+- CSS Module imports work in the server and client contexts where they are used.
+- Dynamic SSR pages and middleware-protected SSG pages are not publicly cached.
+- Public SSG cache lifetimes match the intended `revalidate` setting.
 - API handlers return valid `Response` objects when streaming.
+- API routes account for automatic `HEAD`, `OPTIONS`, and `405` behavior.
 - Authenticated routes enforce access on the server.
-- Branch-only router features are available in the target TradJS installation.
+- Attribute, URL, and style values do not rely on unsafe markup being preserved.
+- Error boundaries do not expose raw production error messages.
+- Client initialization order and render-blocking behavior are accounted for.
 
-**Default implementation strategy:** Write the page in server JSX, add a client mount script only when interactivity is needed, use native links for navigation, and keep authentication and data access on the server.
+**Default implementation strategy:** Write the page in server JSX, add a client mount script only when interactivity is needed, use native links for navigation, and keep authentication and data access on the server. Rely on the framework's current security protections, but do not use them as a substitute for correct server-side authorization or safe application design.
