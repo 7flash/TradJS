@@ -495,6 +495,18 @@ The value is in seconds. For a page configured with `revalidate: 60`, the SSG ca
 
 When the cached entry expires, the next request causes TradJS to render the page again and refill the cache. Subsequent requests use the refreshed entry. Concurrent cache misses share a single render rather than triggering redundant renders.
 
+A page with route params is prerendered for the paths it lists in `ssgParams()`:
+
+```tsx
+// app/blog/[slug]/page.tsx
+export const ssg = { revalidate: 300 };
+export async function ssgParams() {
+  return [{ slug: "hello" }, { slug: "release-notes" }];
+}
+```
+
+Each listed path (`/blog/hello`) is cached and revalidated on its own. Any other path (`/blog/new-post`) renders dynamically as usual. Without `ssgParams()`, a page with params is not prerendered.
+
 Startup prerendering and cache refills use the same HTML rendering path, so the refreshed page retains its client assets and scoped styles.
 
 Middleware executes before the SSG cache lookup, including when a prerendered response is already cached. Authentication and authorization checks in middleware therefore continue to protect SSG routes.

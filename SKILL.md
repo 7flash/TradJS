@@ -328,6 +328,8 @@ Use `export const ssg = true` for an entry without a configured expiration.
 
 SSG prerenders eligible static routes and caches the HTML.
 
+For a route with params (`app/blog/[slug]/page.tsx`), also export `ssgParams()` returning the param sets to prerender, e.g. `[{ slug: "hello" }]`. Listed paths are cached; other paths render dynamically.
+
 `revalidate` specifies the cache lifetime in seconds. After expiration, the page is regenerated automatically on a subsequent request. Concurrent requests that need the same regeneration share a single regeneration operation.
 
 Public SSG responses use a cache `max-age` matching the `revalidate` setting, defaulting to 3600 seconds.
