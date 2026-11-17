@@ -154,6 +154,7 @@ async function wrapWithLayouts(
   tree: any,
   layoutPaths: string[],
   pathname: string,
+  params: Record<string, string> = {},
 ) {
   let wrappedTree = tree;
   let hasAsyncLayout = false;
@@ -162,9 +163,12 @@ async function wrapWithLayouts(
     const LayoutComponent = layoutModule.default;
     if (LayoutComponent) {
       hasAsyncLayout ||= isDeclaredAsyncComponent(LayoutComponent);
+      // Layouts get the same route params as the page (e.g. a layout for
+      // /teams/[team] needs `team`).
       wrappedTree = createElement(LayoutComponent, {
         children: wrappedTree,
         pathname,
+        params,
       });
     }
   }
@@ -660,6 +664,7 @@ export function createAppRouter(
       createElement(PageComponent, { params }),
       route.layouts,
       route.pattern,
+      params,
     );
 
     const { value: html, head: headElements } = await collectHeadAsync(async () =>
@@ -963,6 +968,7 @@ export function createAppRouter(
         createElement("tradjs-stream-slot", {}),
         match.route.layouts,
         pathname,
+        match.params,
       );
       const shellRender = await collectHeadAsync(() => httpMeasure.measure(
         {
@@ -1104,6 +1110,7 @@ export function createAppRouter(
               createElement(ErrorComponent, errorProps),
               match.route.layouts,
               pathname,
+              match.params,
             );
 
             const errorHtml = await renderServerTree(
