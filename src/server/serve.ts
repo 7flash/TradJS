@@ -1,4 +1,4 @@
-import { lstat, unlink } from "node:fs/promises";
+import { chmod, lstat, unlink } from "node:fs/promises";
 import { errorMessage, errorStack, serializeError } from "./errors";
 import { escapeHtml } from "./html";
 import { httpMeasure } from "./measure";
@@ -12,6 +12,8 @@ export interface HttpServeOptions {
   unix?: string;
   websocket?: unknown;
   handleSignals?: boolean;
+  /** Interface to listen on (default: Bun's, all interfaces). Not with `unix`. */
+  hostname?: string;
 }
 function generateRequestId(): string {
   return crypto.randomUUID().replaceAll("-", "").slice(0, 12);
@@ -126,6 +128,10 @@ export async function serve(
   if (port !== undefined && unix !== undefined) {
     throw new Error("Cannot specify both port and unix socket");
   }
+  if (unix !== undefined && options.hostname !== undefined)
+    throw new Error("Cannot combine hostname with a unix socket");
+  // In production a busy port is an error, not a silent move to another port.
+  if (!isDev) shouldAutoFindPort = false;
   if (
     port !== undefined &&
     (port < 0 || port > 65535 || !Number.isInteger(port))
@@ -159,6 +165,7 @@ export async function serve(
   };
   const hasWebSocket = options.websocket !== undefined;
   const args: Record<string, unknown> = {
+    ...(options.hostname ? { hostname: options.hostname } : {}),
     idleTimeout: 0,
     development: isDev,
     async fetch(req: Request, bunServer?: { requestIP(req: Request): { address: string } | null }) {
@@ -282,6 +289,8 @@ export async function serve(
   const originalStop = server.stop.bind(server);
   if (unix && !unix.startsWith("\0")) {
     try {
+      // Only the owner may connect to the socket.
+      await chmod(unix, 0o600);
       socketIdentity = await lstat(unix);
     } catch (error) {
       await originalStop(true);

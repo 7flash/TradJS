@@ -1111,6 +1111,8 @@ export function resolveAppDir(appDir?: string): string {
 export interface ServeAppOptions extends AppRouterOptions {
   port?: number;
   unix?: string;
+  hostname?: string;
+  handleSignals?: boolean;
 }
 
 export async function serve(options?: ServeAppOptions): Promise<any>;
@@ -1126,10 +1128,10 @@ export async function serve(
     return serveHttp(handlerOrOptions, serverOptions);
   }
   const options = handlerOrOptions ?? {};
-  const { port, unix, ...routerOptions } = options;
+  const { port, unix, hostname, handleSignals, ...routerOptions } = options;
   const appDir = resolveAppDir(routerOptions.appDir);
   const router = createAppRouter({ ...routerOptions, appDir });
-  return serveHttp(router, { port, unix });
+  return serveHttp(router, { port, unix, hostname, handleSignals });
 }
 
 export async function start(options: ServeAppOptions = {}) {

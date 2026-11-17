@@ -2,6 +2,7 @@ export interface ServeCliOptions {
   appDir?: string;
   unix?: string;
   port?: number;
+  hostname?: string;
   handleSignals: true;
 }
 function takeValue(
@@ -10,7 +11,7 @@ function takeValue(
   index: number,
 ): string {
   const value = args[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`Missing value for ${flag}`);
   }
   return value;
@@ -23,9 +24,15 @@ export function parseServeArgs(args: readonly string[]): ServeCliOptions {
       options.appDir = takeValue(args, arg, i++);
       continue;
     }
+    if (arg === "--host" || arg === "--hostname") {
+      if (options.unix !== undefined)
+        throw new Error("Cannot combine --host with --unix");
+      options.hostname = takeValue(args, arg, i++);
+      continue;
+    }
     if (arg === "--unix") {
-      if (options.port !== undefined) {
-        throw new Error("Cannot combine a TCP port with --unix");
+      if (options.port !== undefined || options.hostname !== undefined) {
+        throw new Error("Cannot combine TCP options with --unix");
       }
       options.unix = takeValue(args, arg, i++);
       continue;

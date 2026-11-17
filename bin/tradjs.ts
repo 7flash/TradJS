@@ -9,12 +9,14 @@ Usage:
   bunx tradjs init <project-name>   Create a new project
   bunx tradjs init .                Create in current directory
   bunx tradjs serve                 Run ./app or route files in the current directory
+  bunx tradjs start                 Serve with NODE_ENV=production
   bunx tradjs build                 Build all routes & assets to disk
   bunx tradjs build --outdir ./out  Build to custom output directory
   bunx tradjs build --entry <file>  Build specific entry points
 
 Serve options:
   [port]               Explicit port (busy ports throw)
+  --host <name>        Interface to listen on (default: all interfaces)
   --appdir <dir>       App directory (default: ./app, then route files in .)
   --unix <path>        Unix socket path
 
@@ -36,7 +38,8 @@ if (command === "build") {
   await buildToDisk(options);
   process.exit(0);
 }
-if (command === "serve") {
+if (command === "serve" || command === "start") {
+  if (command === "start") process.env.NODE_ENV = "production";
   const [{ serve }, { parseServeArgs }] = await Promise.all([
     import("../src/server"),
     import("../src/server/cli-serve"),
@@ -73,7 +76,7 @@ const files: Record<string, string> = {
     "scripts": {
         "dev": "tradjs serve",
         "build": "tradjs build",
-        "start": "tradjs serve"
+        "start": "tradjs start"
     },
     "dependencies": {
         "tradjs": "latest"
