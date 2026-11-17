@@ -45,6 +45,7 @@
 
 ### Added
 
+- SSG for routes with params: a page exports `ssgParams()` returning the param sets to prerender (`[{ slug: "a" }]`); other paths render dynamically.
 - CLI: `tradjs start` (production), `--host`, graceful shutdown on SIGINT/SIGTERM (the option was dropped before), owner-only Unix sockets, and in production a busy port is an error instead of a silent move.
 - `createBoundary({ fallback })`: a client boundary can render a fallback when its render throws, and `boundary.reset()` retries.
 - `notFound()` from `tradjs/server`: a page, layout or server component can answer 404, rendered with the nearest `not-found.tsx` inside its layouts or the built-in 404 page.
