@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- A stylesheet with a relative `@import` of a missing file fails the build with a clear error; before, the whole stylesheet silently came out empty.
 - Layouts in dynamic folders receive the route `params`, like the page.
 - Unknown URLs render the app's nearest `not-found.tsx` (inside its layouts) instead of the built-in 404 page; `notFound()` in an API route answers 404 instead of 500.
 - An async page or layout that never resolves fails after 30 seconds with the error page, instead of holding the request open forever.
