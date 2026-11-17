@@ -1,6 +1,7 @@
 import { attributeName, cssPropertyName } from "../shared/attributes";
 export { SVG_ATTR_MAP } from "../shared/attributes";
 export const SVG_NS = "http://www.w3.org/2000/svg";
+export const MATH_NS = "http://www.w3.org/1998/Math/MathML";
 export const SVG_TAGS = new Set([
   "svg",
   "altGlyph",
@@ -84,16 +85,24 @@ export function createDomElement(
     parentElement.localName !== "foreignObject";
   const svg =
     tag === "svg" || inheritsSvgNamespace || (!parentNode && SVG_TAGS.has(tag));
+  const inheritsMathNamespace =
+    !!parentElement &&
+    parentElement.namespaceURI === MATH_NS &&
+    !(parentElement.localName === "annotation-xml" &&
+      parentElement.getAttribute("encoding")?.toLowerCase() === "text/html");
   const doc = parentNode?.ownerDocument ?? ownerDocument ?? document;
-  return svg ? doc.createElementNS(SVG_NS, tag) : doc.createElement(tag);
+  return svg
+    ? doc.createElementNS(SVG_NS, tag)
+    : tag === "math" || inheritsMathNamespace
+      ? doc.createElementNS(MATH_NS, tag)
+      : doc.createElement(tag);
 }
 export function domAttributeName(el: Element, key: string): string {
   return attributeName(key);
 }
 export function setElementClass(el: Element, value: unknown): void {
   if (isSvgElement(el)) {
-    if (value == null || value === false || value === "")
-      el.removeAttribute("class");
+    if (value == null || value === false) el.removeAttribute("class");
     else el.setAttribute("class", String(value));
     return;
   }

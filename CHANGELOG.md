@@ -1,5 +1,20 @@
 # Changelog
 
+## 4.6.3 (2026-11-18)
+
+### Security
+- The first client render now checks inline styles like updates and server rendering do: a `url(javascript:...)` in a `style` object was written to the page on mount.
+
+### Fixed
+- Server rendering of `true` on attributes that are not HTML booleans (`aria-hidden`, `aria-expanded`, `draggable`, `contenteditable`, `data-*`) wrote a bare name, which means "" ("auto" or invalid), not true. It now writes `="true"`, like the browser renderer.
+- Server: `className={false}` no longer renders `class="false"`; an empty style object renders no `style=""`; a duplicate alias (`class` and `className`) uses the last one, as the browser renderer does.
+- Server: a controlled `<select value>` marks its matching `<option>` selected (a `value` attribute on `<select>` does nothing), and `<textarea value>` renders the value as content.
+- Server: a leading newline in `<pre>` or `<textarea>` is kept (the HTML parser drops the first one).
+- Client: `<math>` and its children are created in the MathML namespace; `<template>` children go into `template.content`; an empty class on SVG stays `class=""` as on HTML elements.
+
+### Tests
+- `tests/ssr-parity-matrix.test.ts`: 3,072 seeded JSX trees with hostile strings in every text and attribute position, rendered on the server, parsed, and compared with the browser renderer's DOM; plus head-tag, inline-script and CSS-URL safety checks.
+
 ## 4.6.2 (2026-11-18)
 
 ### Security

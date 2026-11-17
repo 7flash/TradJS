@@ -657,12 +657,13 @@ function patchFiber(
       // Raw HTML owns the element's content: unmount the old children first
       // (disposing their listeners and refs) and render no children with it.
       const raw = newVNode.props.dangerouslySetInnerHTML != null;
+      const childHost = childMountHost(el, normalizeChildren(newVNode.props.children));
       if (raw && oldFiber.children.length)
-        diffChildren(oldFiber, el, oldFiber.children, []);
+        diffChildren(oldFiber, childHost, oldFiber.children, []);
       patchProps(el, oldVNode.props, newVNode.props, oldFiber);
       if (!raw) {
         const newChildVNodes = normalizeChildren(newVNode.props.children);
-        diffChildren(oldFiber, el, oldFiber.children, newChildVNodes);
+        diffChildren(oldFiber, childHost, oldFiber.children, newChildVNodes);
       }
       syncFormState(el, newVNode.props);
       oldFiber.vnode = newVNode;
@@ -687,6 +688,14 @@ function patchFiber(
     }
   }
   return newFiber;
+}
+
+// <template> children belong in its content fragment, as the HTML parser
+// puts them. (Rows placed directly in a <table> stay there: the DOM accepts
+// them, and an implicit <tbody> would move rows between parents on diffs.)
+function childMountHost(el: Element, _children: (VNode | Child)[]): Node {
+  if (el.localName === "template") return (el as HTMLTemplateElement).content;
+  return el;
 }
 
 function mountVNode(
@@ -746,8 +755,9 @@ function mountVNode(
   // With raw HTML, the HTML is the content; children are ignored.
   const children =
     props.dangerouslySetInnerHTML != null ? [] : normalizeChildren(props.children);
+  const childHost = childMountHost(el, children);
   for (const child of children) {
-    const childFiber = mountVNode(child, fiber, el);
+    const childFiber = mountVNode(child, fiber, childHost);
     if (childFiber) fiber.children.push(childFiber);
   }
   syncFormState(el, props);
@@ -889,8 +899,9 @@ function applyProps(el: Element, props: Props, fiber: Fiber): void {
     if (isFormStateProp(el, key)) continue;
     if (key === "className" || key === "class") {
       setElementClass(el, value);
-    } else if (key === "style" && typeof value === "object") {
-      assignElementStyle(el, value);
+    } else if (key === "style" && value != null) {
+      // Initial mounts must enforce the same CSS URL policy as updates and SSR.
+      setDomProp(el, key, value);
     } else if (key.startsWith("on") && typeof value === "function") {
       const { type, capture, id } = eventOf(key);
       el.addEventListener(type, value, capture);

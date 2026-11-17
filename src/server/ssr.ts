@@ -57,7 +57,14 @@ function isPromiseLike<T = unknown>(value: unknown): value is PromiseLike<T> {
 
 function renderAttributes(propsObj: Record<string, any>): string {
   let html = "";
-  for (const [key, value] of Object.entries(propsObj)) {
+  const entries = Object.entries(propsObj);
+  for (const [index, [key, value]] of entries.entries()) {
+    // HTML parsers keep the first duplicate attribute, but the DOM renderer
+    // applies the last JSX prop. Resolve aliases before emitting markup.
+    const mapped = attributeName(key).toLowerCase();
+    if (entries.slice(index + 1).some(([later]) =>
+      !isEventProp(later) && attributeName(later).toLowerCase() === mapped
+    )) continue;
     if (
       key === "children" ||
       key === "key" ||
@@ -71,6 +78,8 @@ function renderAttributes(propsObj: Record<string, any>): string {
     // false drops real HTML boolean attributes (attributeValue returns null);
     // aria-*, data-* and enumerated ones like draggable render "false".
     if (value === undefined || value === null) continue;
+    // The browser renderer removes a falsy class instead of serializing "false".
+    if ((key === "class" || key === "className") && value === false) continue;
     const name = attributeName(key);
     // Check a style object as the CSS text it becomes (url(javascript:...)).
     const checkedValue =
@@ -86,18 +95,42 @@ function renderAttributes(propsObj: Record<string, any>): string {
       continue;
     }
     if (key === "style" && typeof value === "object") {
-      html += ` style="${escapeHtml(styleObjectToString(value))}"`;
+      const styleText = styleObjectToString(value);
+      if (styleText) html += ` style="${escapeHtml(styleText)}"`;
       continue;
     }
-    if (value === true && attributeValue(name, value) === "true") {
-      html += ` ${name}`;
-      continue;
-    }
+    // true on a non-boolean attribute (aria-hidden, draggable, data-*) is the
+    // string "true": a bare name would mean "" ("auto" or invalid), not true.
     const serialized = attributeValue(name, value);
     if (serialized === null) continue;
     html += serialized === "" ? ` ${name}` : ` ${name}="${escapeHtml(serialized)}"`;
   }
   return html;
+}
+
+// A <select> uses option selectedness rather than a value attribute in HTML.
+// The client applies its controlled value after mounting options; SSR must
+// express the same initial selection in the markup.
+function selectChildren(children: any, value: unknown): any {
+  const selectedValues = new Set(
+    Array.isArray(value) ? value.map(String) : [String(value)],
+  );
+  const visit = (child: any): any => {
+    if (Array.isArray(child)) return child.map(visit);
+    if (!child || typeof child !== "object") return child;
+    if (child.type === Fragment || child.type === "optgroup")
+      return { ...child, props: { ...child.props, children: visit(child.props?.children) } };
+    if (child.type !== "option") return child;
+    const props = child.props || {};
+    const optionValue = props.value == null
+      ? rawTextOf(props.children, Fragment)
+      : String(props.value);
+    return {
+      ...child,
+      props: { ...props, selected: selectedValues.has(optionValue) },
+    };
+  };
+  return visit(children);
 }
 
 export function renderToString(vnode: VNode | Child): string {
@@ -139,7 +172,10 @@ export function renderToString(vnode: VNode | Child): string {
   const tagName = type as string;
   if (!isSafeHtmlName(tagName)) throw new TypeError(`Invalid HTML tag name: ${tagName}`);
   const propsObj = props || {};
-  let html = `<${tagName}${renderAttributes(propsObj)}>`;
+  const lowerTag = tagName.toLowerCase();
+  const attrs = lowerTag === "select" || lowerTag === "textarea"
+    ? { ...propsObj, value: undefined } : propsObj;
+  let html = `<${tagName}${renderAttributes(attrs)}>`;
 
   if (VOID_ELEMENTS.has(tagName)) return html;
 
@@ -148,7 +184,13 @@ export function renderToString(vnode: VNode | Child): string {
   } else if (isRawTextElement(tagName)) {
     html += neutralizeRawTextEndTag(rawTextOf(propsObj.children, Fragment), tagName);
   } else {
-    html += renderChildrenToString(propsObj.children);
+    const children = lowerTag === "select" && propsObj.value != null
+      ? selectChildren(propsObj.children, propsObj.value) : propsObj.children;
+    const body = lowerTag === "textarea" && propsObj.value != null
+      ? escapeHtml(String(propsObj.value))
+      : renderChildrenToString(children);
+    // HTML parsing strips the first LF after a pre/textarea start tag.
+    html += /^(?:pre|textarea)$/i.test(tagName) && body.startsWith("\n") ? "\n" + body : body;
   }
 
   html += `</${tagName}>`;
@@ -194,7 +236,10 @@ export async function renderToStringAsync(
   const tagName = type as string;
   if (!isSafeHtmlName(tagName)) throw new TypeError(`Invalid HTML tag name: ${tagName}`);
   const propsObj = props || {};
-  let html = `<${tagName}${renderAttributes(propsObj)}>`;
+  const lowerTag = tagName.toLowerCase();
+  const attrs = lowerTag === "select" || lowerTag === "textarea"
+    ? { ...propsObj, value: undefined } : propsObj;
+  let html = `<${tagName}${renderAttributes(attrs)}>`;
 
   if (VOID_ELEMENTS.has(tagName)) return html;
 
@@ -203,7 +248,12 @@ export async function renderToStringAsync(
   } else if (isRawTextElement(tagName)) {
     html += neutralizeRawTextEndTag(rawTextOf(propsObj.children, Fragment), tagName);
   } else {
-    html += await renderChildrenAsync(propsObj.children);
+    const children = lowerTag === "select" && propsObj.value != null
+      ? selectChildren(propsObj.children, propsObj.value) : propsObj.children;
+    const body = lowerTag === "textarea" && propsObj.value != null
+      ? escapeHtml(String(propsObj.value))
+      : await renderChildrenAsync(children);
+    html += /^(?:pre|textarea)$/i.test(tagName) && body.startsWith("\n") ? "\n" + body : body;
   }
 
   html += `</${tagName}>`;
