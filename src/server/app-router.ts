@@ -186,7 +186,13 @@ const __tradjsShowClientError=(error,label='Client error')=>{
   if(title)title.textContent='TradJS: '+label;
   if(detail)detail.textContent=__tradjsDev?__tradjsDescribeError(error):'The client failed to start. Check the server and browser logs.';
 };
-window.addEventListener('error',(event)=>__tradjsShowClientError(event.error||event.message,'Unhandled client error'));
+// In production only a failed mount covers the page; a later error (a click
+// handler, a third-party script) is logged and the working page stays usable.
+const __tradjsReportRuntimeError=(error,label)=>{
+  if(__tradjsDev)__tradjsShowClientError(error,label);
+  else console.error('[tradjs] '+label,error);
+};
+window.addEventListener('error',(event)=>__tradjsReportRuntimeError(event.error||event.message,'Unhandled client error'));
 const __tradjsIsSkippedTransition=(error)=>{
   const name=error?.name;
   const message=typeof error?.message==='string'?error.message:'';
@@ -195,12 +201,13 @@ const __tradjsIsSkippedTransition=(error)=>{
 };
 window.addEventListener('unhandledrejection',(event)=>{
   if(__tradjsIsSkippedTransition(event.reason)){event.preventDefault();return}
-  __tradjsShowClientError(event.reason,'Unhandled promise rejection');
+  __tradjsReportRuntimeError(event.reason,'Unhandled promise rejection');
 });
 for(const entry of __tradjsScripts){
   try{
     const m=await import(entry.url);
     if(typeof m.default==='function')await m.default({params:__tradjsParams});
+    else if(__tradjsDev)console.warn('[tradjs] '+entry.type+' script '+entry.url+' has no default export to mount');
   }catch(error){
     __tradjsShowClientError(error,'Failed to mount '+entry.type+' script');
     break;

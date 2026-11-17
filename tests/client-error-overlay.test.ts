@@ -202,3 +202,39 @@ describe("createAppRouter client error overlay", () => {
     });
   }
 });
+
+describe("production client errors", () => {
+  async function run(load: (url: string) => Promise<unknown>) {
+    const { createClientBootstrap } = await import("../src/server/app-router");
+    const dom = new JSDOM("<!doctype html><body><main>app</main></body>", {
+      url: "https://app.test/", runScripts: "outside-only",
+    });
+    const html = createClientBootstrap([{ url: "/page.js", type: "page" }], {}, false);
+    const code = html.replace(/^<script[^>]*>/, "").replace(/<\/script>$/, "")
+      .replace("import(entry.url)", "__tradjsTestImport(entry.url)");
+    const errors: unknown[][] = [];
+    dom.window.console.error = (...args: unknown[]) => errors.push(args);
+    await (dom.window.Function("__tradjsTestImport", `return (async()=>{${code}})();`) as any)(load);
+    const overlay = () => dom.window.document.getElementById("__tradjs-error-overlay");
+    return { dom, errors, overlay };
+  }
+
+  test("a later runtime error is logged without covering the working page", async () => {
+    const { dom, errors, overlay } = await run(async () => ({ default: () => {} }));
+    try {
+      dom.window.dispatchEvent(new dom.window.ErrorEvent("error", {
+        error: new dom.window.Error("click handler failed"), message: "click handler failed",
+      }));
+      expect(overlay()).toBeNull();
+      expect(errors).toHaveLength(1);
+    } finally { dom.window.close(); }
+  });
+
+  test("a failed mount still shows the generic overlay", async () => {
+    const { dom, overlay } = await run(async () => { throw new Error("boom"); });
+    try {
+      expect(overlay()?.textContent).toContain("The client failed to start");
+      expect(overlay()?.textContent).not.toContain("boom");
+    } finally { dom.window.close(); }
+  });
+});
