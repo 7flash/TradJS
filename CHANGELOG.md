@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- Unknown URLs render the app's nearest `not-found.tsx` (inside its layouts) instead of the built-in 404 page; `notFound()` in an API route answers 404 instead of 500.
 - An async page or layout that never resolves fails after 30 seconds with the error page, instead of holding the request open forever.
 - Production: an error after the page started (a click handler, a third-party script) is logged instead of covering the page with the "client failed to start" overlay; the overlay is kept for failed mounts.
 - Client renderer: `render(0)` and components returning `0` show `0`; the first render applies the same URL and attribute rules as updates (`javascript:` links were kept, `aria-hidden={false}` was dropped); `onClickCapture` and `onDoubleClick` work; `dangerouslySetInnerHTML` replaces children instead of appending them; duplicate sibling keys log a warning; a component that grows from one child to several keeps them in order.
