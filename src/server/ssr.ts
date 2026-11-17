@@ -68,7 +68,9 @@ function renderAttributes(propsObj: Record<string, any>): string {
     ) {
       continue;
     }
-    if (value === undefined || value === null || value === false) continue;
+    // false drops real HTML boolean attributes (attributeValue returns null);
+    // aria-*, data-* and enumerated ones like draggable render "false".
+    if (value === undefined || value === null) continue;
     const name = attributeName(key);
     // Check a style object as the CSS text it becomes (url(javascript:...)).
     const checkedValue =

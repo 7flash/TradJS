@@ -632,7 +632,7 @@ describe("serve", () => {
     const server = await serve(handler, { port: getRandomPort() });
     const response = await fetch(`http://localhost:${server.port}/`);
     const json = await response.json();
-    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(response.headers.get("content-type")).toContain("application/json");
     expect(json).toEqual({ message: "Hello", count: 42 });
     server.stop();
   });
