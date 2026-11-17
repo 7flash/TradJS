@@ -23,6 +23,7 @@ import {
   prerender as ssgPrerender,
 } from "./ssg";
 import { serve as serveHttp } from "./serve";
+import { withoutResponseBody } from "./response";
 import { httpMeasure } from "./measure";
 import type {
   Handler,
@@ -146,11 +147,12 @@ async function wrapWithLayouts(
 export function createClientBootstrap(
   scripts: { url: string; type: "layout" | "page" }[],
   params: Record<string, any>,
+  dev = isDev,
 ): string {
   if (scripts.length === 0) return "";
   const scriptEntries = safeJson(scripts);
   const paramsJson = safeJson(params);
-  const devJson = JSON.stringify(isDev);
+  const devJson = JSON.stringify(dev);
   return `<script type="module" blocking="render" data-tradjs-client>
 const __tradjsDev=${devJson};
 const __tradjsParams=${paramsJson};
@@ -208,13 +210,14 @@ for(const entry of __tradjsScripts){
 function renderGenericErrorPage(
   error: unknown,
   viewTransitions: boolean,
+  dev = isDev,
 ): string {
   const value = error as any;
   const message = value?.message || String(error);
   const stack = value?.stack || message;
-  const detail = isDev ? stack : "Internal Server Error";
+  const detail = dev ? stack : "Internal Server Error";
   return injectViewTransitions(
-    `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>500 - Internal Server Error</title></head><body style="margin:0;background:#120f12;color:#fff;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"><main style="padding:24px;max-width:1200px;margin:0 auto"><h1 style="color:#ff6b6b">500 - Internal Server Error</h1><p>${escapeHtml(isDev ? message : "The request could not be rendered.")}</p><pre style="white-space:pre-wrap;word-break:break-word;background:#1d171d;border:1px solid #3a2c3a;border-radius:8px;padding:16px;overflow:auto">${escapeHtml(detail)}</pre></main></body></html>`,
+    `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>500 - Internal Server Error</title></head><body style="margin:0;background:#120f12;color:#fff;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"><main style="padding:24px;max-width:1200px;margin:0 auto"><h1 style="color:#ff6b6b">500 - Internal Server Error</h1><p>${escapeHtml(dev ? message : "The request could not be rendered.")}</p><pre style="white-space:pre-wrap;word-break:break-word;background:#1d171d;border:1px solid #3a2c3a;border-radius:8px;padding:16px;overflow:auto">${escapeHtml(detail)}</pre></main></body></html>`,
     viewTransitions,
   );
 }
@@ -458,6 +461,7 @@ async function collectClientAssets(
   routeFilePath: string,
   layouts: string[],
   params: Record<string, any>,
+  dev = isDev,
 ): Promise<{ clientBootstrap: string; importMapTag: string }> {
   const clientScriptUrls: { url: string; type: "layout" | "page" }[] = [];
   const clientPaths: string[] = [];
@@ -489,12 +493,20 @@ async function collectClientAssets(
     }
   }
   return {
-    clientBootstrap: createClientBootstrap(clientScriptUrls, params),
+    clientBootstrap: createClientBootstrap(clientScriptUrls, params, dev),
     importMapTag,
   };
 }
 
-export function createAppRouter(options: AppRouterOptions = {}): Handler {
+export function createAppRouter(
+  options: AppRouterOptions = {},
+): Handler & { ready: Promise<number> } {
+  // Decided per router (default: NODE_ENV when the router is created), not at import.
+  const isDev =
+    (options.mode ?? (process.env.NODE_ENV === "production" ? "production" : "development")) !==
+    "production";
+  let resolveReady!: (count: number) => void;
+  const ready = new Promise<number>((resolve) => (resolveReady = resolve));
   registerServerCSSModules();
   const { appDir = path.join(process.cwd(), "app"), viewTransitions = true } =
     options;
@@ -587,6 +599,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       route.filePath,
       route.layouts,
       {},
+      isDev,
     );
     if (importMapTag) {
       fullHtml = fullHtml.replace("</head>", `${importMapTag}</head>`);
@@ -607,13 +620,17 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       try {
         const count = await ssgPrerender(routes, renderSSGRoute);
         if (count > 0) console.log(`⚡ SSG: Pre-rendered ${count} pages`);
+        resolveReady(count);
       } catch (error: any) {
         console.warn("SSG prerender failed:", error?.message || error);
+        resolveReady(0);
       }
     })();
+  } else {
+    resolveReady(0);
   }
 
-  return async (req: Request) => {
+  const handle = async (req: Request) => {
     const url = new URL(req.url);
     // The decoded, normalized path: what route matching used, so layouts
     // and the SSG cache see one pathname for /a and /a/.
@@ -796,6 +813,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
         match.route.filePath,
         match.route.layouts,
         match.params,
+        isDev,
       );
 
       const responseHeaders = {
@@ -966,7 +984,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
         }
       }
 
-      return new Response(renderGenericErrorPage(error, viewTransitions), {
+      return new Response(renderGenericErrorPage(error, viewTransitions, isDev), {
         status: 500,
         headers: {
           "Content-Type": "text/html",
@@ -975,6 +993,15 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       });
     }
   };
+  /** Resolves with the number of prerendered SSG pages (0 in development). */
+  // HEAD gets the same status and headers as GET, never a body.
+  const handler = async (req: Request) => {
+    const response = await handle(req);
+    return req.method === "HEAD" && response instanceof Response
+      ? withoutResponseBody(response)
+      : response;
+  };
+  return Object.assign(handler, { ready });
 }
 
 const DEFAULT_APP_DIR_NAME = "app";

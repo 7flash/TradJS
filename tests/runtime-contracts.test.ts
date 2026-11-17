@@ -54,7 +54,8 @@ describe("native router and transport contracts", () => {
         const cached = await request("http://test/"),
           dynamic = await request("http://test/?fresh=1");
         expect(cached.headers.get("X-TradJS-SSG")).toBe("1");
-        expect(cached.headers.get("Cache-Control")).toContain("private");
+        // Behind middleware the page may depend on who asks: no-store by design.
+        expect(cached.headers.get("Cache-Control")).toBe("no-store");
         expect(await cached.text()).toBe(await dynamic.text());
         const head = (await router(
           new Request("http://test/", {

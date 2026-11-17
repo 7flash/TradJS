@@ -59,6 +59,8 @@ export interface RenderPageOptions {
 }
 
 export interface AppRouterOptions {
+  /** 'production' enables SSG, caching and hidden error details. Default: from NODE_ENV when createAppRouter() runs. */
+  mode?: "development" | "production";
   /** Path to app directory (default: ./app) */
   appDir?: string;
   /** Default title for pages */
