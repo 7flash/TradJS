@@ -347,11 +347,15 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
     console.warn("Could not generate import map:", error);
   }
 
-  const serverHtml = await renderServerTree(
-    createElement(Component, { ...props, params }),
-    isDeclaredAsyncComponent(Component),
-    "renderPage() component",
+  // Collect <Head> per render; a page <title> replaces the default title.
+  const { value: serverHtml, head: headElements } = await collectHeadAsync(async () =>
+    renderServerTree(
+      createElement(Component, { ...props, params }),
+      isDeclaredAsyncComponent(Component),
+      "renderPage() component",
+    ),
   );
+  const headHasTitle = headElements.some((el) => /^<title[\s>]/i.test(el));
 
   let scriptVirtualPath = "";
   if (clientComponent) {
@@ -372,7 +376,8 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
           <meta charset="utf-8">
           <meta name="viewport" content="${escapeHtml(viewport)}">
           ${metaTags}
-          <title>${escapeHtml(title)}</title>
+          ${headHasTitle ? "" : `<title>${escapeHtml(title)}</title>`}
+          ${headElements.join("\n")}
           ${stylesVirtualPath ? `<link rel="stylesheet" href="${stylesVirtualPath}">` : ""}
         </head>
         <body>

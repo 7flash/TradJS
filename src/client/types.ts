@@ -2,7 +2,7 @@ export type Props = Record<string, any> & { children?: Child | Child[] };
 export type Child = VNode | string | number | boolean | null | undefined;
 export type Component<P = Props> = (props: P) => VNode | null;
 export type AsyncComponent<P = Props> = (props: P) => Promise<VNode | null>;
-export const Fragment = Symbol("Fragment");
+export const Fragment = Symbol.for("tradjs.fragment");
 
 export type VNode = {
   type: string | Component<any> | AsyncComponent<any> | typeof Fragment;

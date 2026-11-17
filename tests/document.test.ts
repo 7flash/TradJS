@@ -93,8 +93,9 @@ describe("document navigation", () => {
       params: { id: "</script><script>bad()</script>" },
       pathname: '/items/a"b',
     };
+    // base64: Bun reads exports from a base64 data: module, not a percent-encoded one.
     const moduleURL = (code: string) =>
-      `data:text/javascript,${encodeURIComponent(code)}`;
+      `data:text/javascript;base64,${btoa(unescape(encodeURIComponent(code)))}`;
     const urls = [
       moduleURL(
         'export default async context => { globalThis.__tradjsInit = [context]; await Promise.resolve(); globalThis.__tradjsInit.push("layout"); }',
@@ -145,7 +146,9 @@ describe("document navigation", () => {
   });
   test("fragments survive separate package instances", async () => {
     const moduleURL =
-      'data:text/javascript,export const Fragment = Symbol.for("tradjs.fragment")';
+      // base64: Bun reads exports from a base64 data: module, not a percent-encoded one.
+      "data:text/javascript;base64," +
+      btoa('export const Fragment = Symbol.for("tradjs.fragment")');
     const copy = await import(moduleURL);
     expect(copy.Fragment).toBe(Fragment);
     const vnode = createElement(
