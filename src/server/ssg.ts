@@ -109,6 +109,20 @@ export function createSSGCache(): SSGCache {
   return { get, set, getOrRender, clear };
 }
 const standalone = createSSGCache();
+const renderers = new Map<
+  string,
+  { render: () => Promise<string>; revalidateMs?: number }
+>();
+export function getPrerenderedOrRender(pathname: string): Promise<string | null> {
+  const entry = renderers.get(pathname);
+  return entry
+    ? standalone.getOrRender(pathname, entry.render, entry.revalidateMs)
+    : Promise.resolve(standalone.get(pathname));
+}
+/** True when prerender() rendered this concrete path from a page's ssgParams(). */
+export function isPrerenderedPath(pathname: string): boolean {
+  return renderers.has(pathname);
+}
 export function getPrerendered(pathname: string): string | null {
   return standalone.get(pathname);
 }
@@ -130,10 +144,11 @@ export function setPrerendered(
 }
 export function clearSSGCache(): void {
   globalEpoch++;
+  renderers.clear();
 }
 export async function prerender(
   routes: Route[],
-  renderRoute: (route: Route) => Promise<string>,
+  renderRoute: (route: Route, params: Record<string, string>) => Promise<string>,
   cache: SSGCache = standalone,
 ): Promise<number> {
   return ssgMeasure.measure(
@@ -146,18 +161,40 @@ export async function prerender(
     },
     async () => {
       let count = 0;
+      const seen = new Set<string>();
       for (const route of routes) {
-        if (route.type === "api" || route.paramNames.length) continue;
+        if (route.type === "api") continue;
         try {
           const mod = await import(route.filePath);
           const config = resolveSSGConfig(mod.ssg);
           if (!config) continue;
-          await cache.getOrRender(
-            route.pattern,
-            () => renderRoute(route),
-            config.revalidateMs,
-          );
-          count++;
+          const sets: Record<string, string>[] = route.paramNames.length
+            ? (typeof mod.ssgParams === "function" ? await mod.ssgParams() : [])
+            : [{}];
+          if (!Array.isArray(sets))
+            throw new Error("ssgParams must return an array");
+          for (const params of sets) {
+            if (
+              !params || typeof params !== "object" || Array.isArray(params) ||
+              route.paramNames.some((name) => typeof params[name] !== "string") ||
+              Object.values(params).some((value) => typeof value !== "string")
+            ) throw new Error("ssgParams must provide string route parameters");
+            const pathname = route.pattern.replace(
+              /([:*])([^/]+)/g,
+              (_, kind, name: string) => kind === "*"
+                ? params[name].split("/").map(encodeURIComponent).join("/")
+                : encodeURIComponent(params[name]),
+            );
+            if (!route.regex.test(pathname))
+              throw new Error(`Invalid SSG path: ${pathname}`);
+            if (seen.has(pathname)) continue;
+            const render = () => renderRoute(route, params);
+            await cache.getOrRender(pathname, render, config.revalidateMs);
+            if (cache === standalone)
+              renderers.set(pathname, { render, revalidateMs: config.revalidateMs });
+            seen.add(pathname);
+            count++;
+          }
         } catch (error) {
           console.warn(
             `[tradjs] SSG route ${route.pattern} left dynamic after failure:`,

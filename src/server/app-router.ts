@@ -19,6 +19,7 @@ import {
 } from "./build";
 import {
   getOrRenderPrerendered,
+  isPrerenderedPath,
   resolveSSGConfig,
   prerender as ssgPrerender,
 } from "./ssg";
@@ -565,7 +566,7 @@ export function createAppRouter(
     }
   }
 
-  const renderSSGRoute = async (route: any) => {
+  const renderSSGRoute = async (route: any, params: Record<string, string> = {}) => {
     const pageModule = await import(route.filePath);
     const PageComponent = pageModule.default || pageModule.Page;
     if (!PageComponent) {
@@ -574,7 +575,7 @@ export function createAppRouter(
 
     const pageIsAsync = isDeclaredAsyncComponent(PageComponent);
     const wrapped = await wrapWithLayouts(
-      createElement(PageComponent, { params: {} }),
+      createElement(PageComponent, { params }),
       route.layouts,
       route.pattern,
     );
@@ -703,14 +704,16 @@ export function createAppRouter(
       if (
         !isDev &&
         match.route.type === "page" &&
-        match.route.paramNames.length === 0
+        // Routes with params are static only for the paths ssgParams() listed;
+        // any other path renders dynamically.
+        (match.route.paramNames.length === 0 || isPrerenderedPath(pathname))
       ) {
         const pageModule = await import(match.route.filePath);
         const config = resolveSSGConfig(pageModule.ssg);
         if (config) {
           const html = await getOrRenderPrerendered(
             pathname,
-            () => renderSSGRoute(match.route),
+            () => renderSSGRoute(match.route, match.params),
             config.revalidateMs,
           );
           const maxAge =
