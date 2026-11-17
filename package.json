@@ -5,7 +5,7 @@
   "module": "./src/web.ts",
   "main": "./src/web.ts",
   "bin": {
-    "tradjs": "./bin/tradjs.ts"
+    "tradjs": "bin/tradjs.ts"
   },
   "files": [
     "src",
