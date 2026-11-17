@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- Scoped `page.css`: `:global(...)` is left unscoped, comments are not rewritten, nested `&` rules are not prefixed twice, and `:is(body, ...)` scopes each alternative.
 - A page's `<Head>` `<title>`, `<meta name|property>` and canonical link now replace the layout's instead of both being emitted.
 - Prerendered SSG pages now include client bundles, initialization scripts, import maps, and route-scoped stylesheets. Interactive components work on SSG pages instead of remaining inert.
 - SSG pages now regenerate after their revalidation period expires instead of permanently falling back to dynamic rendering. Concurrent cache misses share a single regeneration.
