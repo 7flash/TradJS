@@ -10,6 +10,7 @@
 - In 4.5.1, concurrent requests could share `<Head>` elements, causing titles and metadata from one request to appear in another response. Each page, layout, and SSG render now isolates its own `<Head>` elements.
 - `<Head>` now also rejects executable URLs and `srcdoc` attributes, consistent with SSR attribute handling.
 - The client renderer applies the same attribute and URL rules as server rendering, so a `javascript:` link or `srcdoc` set from the browser is dropped too.
+- `style` values are checked too: `url(javascript:...)`, `url(vbscript:...)` and non-image `data:` URLs (including CSS-escaped spellings) drop the style attribute, on server and client. Raster `data:image/*` backgrounds stay allowed.
 - In 4.5.1, routes were matched on the encoded URL, so `GET /%61dmin` could reach a sibling `/:slug` route instead of `/admin` and skip its middleware, and `GET /admin/` could fall through to a catch-all. Paths are now decoded once per segment and trailing slashes normalized before matching; encoded slashes, backslashes, control characters, dot segments and malformed or double encoding return 404.
 - CLI builds no longer read an automatically discovered `globals.css` through a symlink pointing outside the app, or write through an output directory that is (or sits under) a symlink.
 
