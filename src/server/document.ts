@@ -37,10 +37,13 @@ export function injectViewTransitions(html: string, enabled: boolean): string {
         html.slice(0, bodyClose.index) + marker + html.slice(bodyClose.index);
       readinessLink = `<link rel="expect" href="#${markerId}" blocking="render" data-tradjs-document-ready>`;
     }
-    return html.replace(
-      /<\/head\s*>/i,
-      () => `${VIEW_TRANSITION_STYLE}${readinessLink}</head>`,
-    );
+    // Defaults go first in <head> so a page's own @view-transition rule
+    // (e.g. navigation: none) comes later and wins; the readiness link stays
+    // at the end of <head>.
+    const withLink = html.replace(/<\/head\s*>/i, () => `${readinessLink}</head>`);
+    return /<head(?:\s[^>]*)?>/i.test(withLink)
+      ? withLink.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${VIEW_TRANSITION_STYLE}`)
+      : withLink.replace(/<\/head\s*>/i, () => `${VIEW_TRANSITION_STYLE}</head>`);
   }
   return html.replace(
     /^(\s*<!doctype html>)?/i,

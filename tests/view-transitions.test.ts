@@ -25,3 +25,14 @@ describe("cross-document view transitions", () => {
     expect(html).not.toContain("@view-transition");
   });
 });
+
+test("a page's own @view-transition rule comes after the framework default", async () => {
+  const { injectViewTransitions } = await import("../src/server/document");
+  const html = '<!doctype html><html><head><style>@view-transition { navigation: none; }</style></head><body><main>x</main></body></html>';
+  const out = injectViewTransitions(html, true);
+  expect(out.indexOf("@view-transition { navigation: auto; }"))
+    .toBeLessThan(out.indexOf("@view-transition { navigation: none; }"));
+  // The readiness link still sits at the end of <head>, after the page's CSS.
+  expect(out.indexOf("data-tradjs-document-ready")).toBeGreaterThan(out.indexOf("navigation: none"));
+  expect(out).toContain("data-tradjs-document-end");
+});
