@@ -248,6 +248,22 @@ async function runBunBuild(config: BuildConfig, context: string) {
   }
   return result;
 }
+/**
+ * A relative @import of a missing file made the whole stylesheet build to
+ * nothing, silently. Fail the build with the file and the import instead.
+ * Package imports (`@import "tailwindcss"`) are resolved by the plugins.
+ */
+function assertLocalImportsExist(cssPath: string, css: string): void {
+  const pattern = /@import\s+(?:url\(\s*)?["']([^"']+)["']/g;
+  for (const match of css.matchAll(pattern)) {
+    const target = match[1]!;
+    if (!target.startsWith("./") && !target.startsWith("../")) continue;
+    const resolved = path.resolve(path.dirname(cssPath), target);
+    if (!existsSync(resolved))
+      throw new Error(`[tradjs] ${cssPath}: @import "${target}" not found (${resolved})`);
+  }
+}
+
 async function runPostCSS(
   context: string,
   cssContent: string,
@@ -748,6 +764,7 @@ async function _buildStyleImpl(
   const ext = path.extname(absolutePath).toLowerCase();
   const baseName = path.basename(absolutePath, ext);
   const cssContent = await Bun.file(absolutePath).text();
+  assertLocalImportsExist(absolutePath, cssContent);
   const result = await runPostCSS(`Style ${absolutePath}`, cssContent, {
     from: absolutePath,
     to: "style.css",
