@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- `@keyframes` defined in a route's `page.css` get a per-route name, so two routes defining the same keyframes no longer overwrite each other.
 - Scoped `page.css`: `:global(...)` is left unscoped, comments are not rewritten, nested `&` rules are not prefixed twice, and `:is(body, ...)` scopes each alternative.
 - A page's `<Head>` `<title>`, `<meta name|property>` and canonical link now replace the layout's instead of both being emitted.
 - Prerendered SSG pages now include client bundles, initialization scripts, import maps, and route-scoped stylesheets. Interactive components work on SSG pages instead of remaining inert.
