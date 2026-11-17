@@ -24,6 +24,7 @@ import {
 } from "./ssg";
 import { serve as serveHttp } from "./serve";
 import { withoutResponseBody } from "./response";
+import { isNotFound } from "./not-found";
 import { httpMeasure } from "./measure";
 import type {
   Handler,
@@ -440,6 +441,25 @@ function apiResultResponse(result: unknown): Response {
   return new Response(json, { headers: { "Content-Type": "application/json; charset=utf-8" } });
 }
 
+const BUILT_IN_NOT_FOUND =
+  '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+  '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+  "<title>404 - Not Found</title></head><body><h1>404 - Not Found</h1></body></html>";
+
+/** The nearest not-found.(tsx|ts|jsx|js) from the page's folder up to appDir. */
+function nearestNotFoundFile(pageFile: string, appDir: string): string | undefined {
+  const root = path.resolve(appDir);
+  let dir = path.dirname(path.resolve(pageFile));
+  while (true) {
+    for (const ext of [".tsx", ".ts", ".jsx", ".js"]) {
+      const file = path.join(dir, `not-found${ext}`);
+      if (existsSync(file)) return file;
+    }
+    if (dir === root || path.dirname(dir) === dir) return undefined;
+    dir = path.dirname(dir);
+  }
+}
+
 /** Route-scoped stylesheet (`page.css` beside the page), shared by SSR and SSG. */
 async function buildRouteScopedStyle(
   routeFilePath: string,
@@ -639,7 +659,7 @@ export function createAppRouter(
 
     if (!match) {
       const notFoundHtml = injectViewTransitions(
-        `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>404 - Not Found</title></head><body><h1>404 - Not Found</h1></body></html>`,
+        BUILT_IN_NOT_FOUND,
         viewTransitions,
       );
       return new Response(notFoundHtml, {
@@ -918,6 +938,47 @@ export function createAppRouter(
       });
       return new Response(stream, { headers: responseHeaders });
     } catch (error: any) {
+      // notFound() is not an error: answer 404 with the nearest not-found page.
+      if (isNotFound(error)) {
+        const notFoundHeaders = { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" };
+        const boundary = nearestNotFoundFile(match.route.filePath, appDir);
+        if (boundary) {
+          try {
+            const mod = await import(boundary);
+            if (typeof mod.default === "function") {
+              const boundaryDir = path.dirname(boundary);
+              // Layouts from the root down to the boundary's folder.
+              const layouts = match.route.layouts.filter((layout: string) => {
+                const rel = path.relative(path.dirname(layout), boundaryDir);
+                return !rel.startsWith("..") && !path.isAbsolute(rel);
+              });
+              const wrapped = await wrapWithLayouts(createElement(mod.default, {}), layouts, pathname);
+              let html = `<!DOCTYPE html>${await renderServerTree(
+                wrapped.tree,
+                isDeclaredAsyncComponent(mod.default) || wrapped.hasAsyncLayout,
+                `not-found page for ${match.route.pattern}`,
+              )}`;
+              if (globalCss) {
+                try {
+                  const stylesPath = await buildStyle(globalCss);
+                  html = html.replace("</head>", `<link rel="stylesheet" href="${stylesPath}"></head>`);
+                } catch {}
+              }
+              return new Response(injectViewTransitions(html, viewTransitions), {
+                status: 404,
+                headers: notFoundHeaders,
+              });
+            }
+          } catch (boundaryError) {
+            // A broken not-found page must not turn a deliberate 404 into a 500.
+            console.error("not-found page failed:", boundaryError);
+          }
+        }
+        return new Response(injectViewTransitions(BUILT_IN_NOT_FOUND, viewTransitions), {
+          status: 404,
+          headers: notFoundHeaders,
+        });
+      }
       // A short id ties what the visitor sees to the full error in the server log.
       const digest = crypto.randomUUID().slice(0, 8);
       console.error(`Error rendering page [${digest}]:`, error);

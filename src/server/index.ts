@@ -8,6 +8,7 @@ export type {
   AppRouterOptions,
 } from "./types";
 export { imports } from "./imports";
+export { notFound, isNotFound } from "./not-found";
 export {
   buildScript,
   buildStyle,
