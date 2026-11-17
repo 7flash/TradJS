@@ -18,7 +18,7 @@
 
 ### Fixed
 
-- Client renderer: `render(0)` and components returning `0` show `0`; the first render applies the same URL and attribute rules as updates (`javascript:` links were kept, `aria-hidden={false}` was dropped); `onClickCapture` and `onDoubleClick` work; `dangerouslySetInnerHTML` replaces children instead of appending them; duplicate sibling keys log a warning.
+- Client renderer: `render(0)` and components returning `0` show `0`; the first render applies the same URL and attribute rules as updates (`javascript:` links were kept, `aria-hidden={false}` was dropped); `onClickCapture` and `onDoubleClick` work; `dangerouslySetInnerHTML` replaces children instead of appending them; duplicate sibling keys log a warning; a component that grows from one child to several keeps them in order.
 - `@keyframes` defined in a route's `page.css` get a per-route name, so two routes defining the same keyframes no longer overwrite each other.
 - Scoped `page.css`: `:global(...)` is left unscoped, comments are not rewritten, nested `&` rules are not prefixed twice, and `:is(body, ...)` scopes each alternative.
 - A page's `<Head>` `<title>`, `<meta name|property>` and canonical link now replace the layout's instead of both being emitted.
