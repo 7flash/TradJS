@@ -839,8 +839,14 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
       });
       return new Response(stream, { headers: responseHeaders });
     } catch (error: any) {
-      console.error("Error rendering page:", error);
-      const errorMessage = error?.message || String(error);
+      // A short id ties what the visitor sees to the full error in the server log.
+      const digest = crypto.randomUUID().slice(0, 8);
+      console.error(`Error rendering page [${digest}]:`, error);
+      // In production error.tsx never sees the raw message: it can carry SQL,
+      // file paths or other internals.
+      const errorMessage = isDev
+        ? error?.message || String(error)
+        : "An unexpected error occurred.";
       const errorStack = error?.stack || "No stack trace available";
 
       if (match.route.errorPath) {
@@ -852,6 +858,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
               error: {
                 message: errorMessage,
                 stack: isDev ? errorStack : undefined,
+                digest,
               },
               pathname: url.pathname,
             };
