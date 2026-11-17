@@ -2,6 +2,10 @@
 
 ## 4.6.0 (2026-11-17)
 
+### Added
+
+- Request `locals`: middleware writes, layouts/pages/error pages read the `locals` prop, API handlers read `ctx.locals`. Types `Locals`, `RouteContext`, `PageProps` from `tradjs/server`.
+
 ### Security
 
 - CSRF protection: `POST`/`PUT`/`PATCH`/`DELETE` with cookies from another site (by `Origin`, or `Sec-Fetch-Site: cross-site`) get 403 before middleware. Options: `csrf: { allowedOrigins }`, `csrf: false`.

@@ -546,6 +546,26 @@ This allows SSG routes to be protected by middleware without bypassing authoriza
 
 TradJS also exports `cors()` from `tradjs/web` for handler-level cross-origin request handling.
 
+#### Sharing values from middleware: `locals`
+
+Each request gets one `locals` object. Middleware writes to it; layouts, pages and error pages receive it as a prop, and API handlers as `ctx.locals`.
+
+```ts
+// app/middleware.ts
+import type { RouteContext } from "tradjs/server";
+export default async function auth(req: Request, ctx: RouteContext<{ user: User }>) {
+  ctx.locals.user = await userFromSession(req);
+}
+
+// app/dashboard/page.tsx
+import type { PageProps } from "tradjs/server";
+export default function Dashboard({ locals }: PageProps<{ user: User }>) {
+  return <h1>Hello {locals.user?.name}</h1>;
+}
+```
+
+Prerendered (SSG) pages are shared by every visitor, so they always get empty `locals`.
+
 #### Cross-site request forgery (CSRF)
 
 Browsers attach a user's cookies to a form post or `fetch` from any website. TradJS therefore refuses `POST`, `PUT`, `PATCH` and `DELETE` requests that carry cookies and come from another site, with `403`, before any middleware or route runs. It looks at the `Origin` header, or at `Sec-Fetch-Site: cross-site` when there is no `Origin`. Requests without cookies, and clients that send neither header (servers, scripts), are not affected.

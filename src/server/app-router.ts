@@ -156,6 +156,7 @@ async function wrapWithLayouts(
   layoutPaths: string[],
   pathname: string,
   params: Record<string, string> = {},
+  locals: Record<string, unknown> = {},
 ) {
   let wrappedTree = tree;
   let hasAsyncLayout = false;
@@ -170,6 +171,7 @@ async function wrapWithLayouts(
         children: wrappedTree,
         pathname,
         params,
+        locals,
       });
     }
   }
@@ -770,6 +772,10 @@ export function createAppRouter(
       });
     }
 
+    // One object per request: middleware fills it, layouts, pages, error
+    // pages and API handlers read it.
+    const locals: Record<string, unknown> = {};
+
     try {
       if (match.route.middlewares.length > 0) {
         for (const mwPath of match.route.middlewares) {
@@ -791,6 +797,7 @@ export function createAppRouter(
                 ? mwFn(req, {
                     params: match.params,
                     route: match.route,
+                    locals,
                   })
                 : undefined;
             },
@@ -879,7 +886,7 @@ export function createAppRouter(
             }
             let response: Response;
             try {
-              const result = await handler(req, { params: match.params });
+              const result = await handler(req, { params: match.params, route: match.route, locals });
               response = apiResultResponse(result);
             } catch (error) {
               if (isNotFound(error)) {
@@ -927,7 +934,7 @@ export function createAppRouter(
       if (!PageComponent) {
         throw new Error(`No default export found in ${match.route.filePath}`);
       }
-      const pageTree = createElement(PageComponent, { params: match.params });
+      const pageTree = createElement(PageComponent, { params: match.params, locals });
 
       let stylesVirtualPath = "";
       if (globalCss) {
@@ -981,6 +988,7 @@ export function createAppRouter(
         match.route.layouts,
         pathname,
         match.params,
+        locals,
       );
       const shellRender = await collectHeadAsync(() => httpMeasure.measure(
         {
@@ -1119,10 +1127,11 @@ export function createAppRouter(
             };
             const errorIsAsync = isDeclaredAsyncComponent(ErrorComponent);
             const wrappedError = await wrapWithLayouts(
-              createElement(ErrorComponent, errorProps),
+              createElement(ErrorComponent, { ...errorProps, locals }),
               match.route.layouts,
               pathname,
               match.params,
+              locals,
             );
 
             const errorHtml = await renderServerTree(
