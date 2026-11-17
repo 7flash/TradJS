@@ -100,3 +100,15 @@ test("an unsafe URL replacing a safe one removes the old attribute", () => {
   expect(a.hasAttribute("href")).toBe(false);
   dom.window.close();
 });
+
+test("first render applies the URL and name rules too", async () => {
+  const { render, createElement: h } = await import("../../src/client/render");
+  const dom = new JSDOM('<!doctype html><body><div id="r"></div></body>');
+  const root = dom.window.document.getElementById("r")!;
+  render(h("a", { href: "javascript:alert(1)", "aria-hidden": false }, "x"), root);
+  const a = root.querySelector("a")!;
+  expect(a.hasAttribute("href")).toBe(false);
+  expect(a.getAttribute("aria-hidden")).toBe("false");
+  render(null, root);
+  dom.window.close();
+});

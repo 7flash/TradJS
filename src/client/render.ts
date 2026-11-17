@@ -163,7 +163,9 @@ export function render(
     try {
       const previousFibers = snapshotFibers(rootFiber.children);
       try {
-        const newChildren = vnode ? [vnode] : [];
+        // 0 and "" are content; only null, undefined and booleans render nothing.
+      const newChildren =
+        vnode == null || typeof vnode === "boolean" ? [] : [vnode];
         // Raw HTML has no child fibers. Remove its unmanaged DOM before taking
         // over the region, without modifying the caller-owned VNode.
         const rootVNode = rootFiber.vnode;
@@ -854,10 +856,10 @@ function applyProps(el: Element, props: Props, fiber: Fiber): void {
       fiber.listeners.set(event, value);
     } else if (key === "dangerouslySetInnerHTML") {
       el.innerHTML = value.__html;
-    } else if (typeof value === "boolean") {
-      if (value) el.setAttribute(domAttributeName(el, key), "");
     } else if (value != null) {
-      el.setAttribute(domAttributeName(el, key), String(value));
+      // Same rules as updates and server rendering: attribute names, event
+      // names, URL schemes, srcdoc, and false only dropping real booleans.
+      setDomProp(el, key, value);
     }
   }
 }
