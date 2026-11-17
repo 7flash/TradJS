@@ -11,6 +11,13 @@ export interface HttpServeOptions {
   port?: number;
   unix?: string;
   websocket?: unknown;
+  /**
+   * Extra origins allowed to open a websocket (e.g. "https://app.example").
+   * Same-origin requests and clients without an Origin header are always
+   * allowed; other browser origins are refused, so a foreign site cannot
+   * open a socket with the user's cookies.
+   */
+  websocketOrigins?: string[];
   handleSignals?: boolean;
   /** Interface to listen on (default: Bun's, all interfaces). Not with `unix`. */
   hostname?: string;
@@ -192,6 +199,16 @@ export async function serve(
               hasWebSocket &&
               req.headers.get("upgrade")?.toLowerCase() === "websocket"
             ) {
+              const origin = req.headers.get("origin");
+              if (origin && !isAllowedWebSocketOrigin(origin, url, options.websocketOrigins)) {
+                return normalizeHandlerResponse(
+                  new Response("WebSocket origin not allowed", {
+                    status: 403,
+                    headers: { "Cache-Control": "no-store" },
+                  }),
+                  { requestId },
+                );
+              }
               const upgraded = server.upgrade(req, { data: { url, pathname } });
               if (upgraded) return undefined;
               return normalizeHandlerResponse(
@@ -345,4 +362,26 @@ export async function findAvailablePort(startPort = 3000): Promise<number> {
     }
   }
   throw new Error(`No available port found in range ${startPort}-${endPort}`);
+}
+
+/** Same origin as the request, or listed in `allowed`. */
+export function isAllowedWebSocketOrigin(
+  origin: string,
+  requestUrl: URL,
+  allowed: readonly string[] = [],
+): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (parsed.host === requestUrl.host) return true;
+  return allowed.some((entry) => {
+    try {
+      return new URL(entry).origin === parsed.origin;
+    } catch {
+      return false;
+    }
+  });
 }
