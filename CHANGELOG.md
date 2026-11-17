@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- Production: an error after the page started (a click handler, a third-party script) is logged instead of covering the page with the "client failed to start" overlay; the overlay is kept for failed mounts.
 - Client renderer: `render(0)` and components returning `0` show `0`; the first render applies the same URL and attribute rules as updates (`javascript:` links were kept, `aria-hidden={false}` was dropped); `onClickCapture` and `onDoubleClick` work; `dangerouslySetInnerHTML` replaces children instead of appending them; duplicate sibling keys log a warning; a component that grows from one child to several keeps them in order.
 - `@keyframes` defined in a route's `page.css` get a per-route name, so two routes defining the same keyframes no longer overwrite each other.
 - Scoped `page.css`: `:global(...)` is left unscoped, comments are not rewritten, nested `&` rules are not prefixed twice, and `:is(body, ...)` scopes each alternative.
