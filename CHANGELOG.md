@@ -41,6 +41,7 @@
 
 ### Added
 
+- `notFound()` from `tradjs/server`: a page, layout or server component can answer 404, rendered with the nearest `not-found.tsx` inside its layouts or the built-in 404 page.
 - `createAppRouter({ mode })` chooses development or production per router (default: `NODE_ENV` when the router is created, no longer when the module is imported), and the returned handler has `ready`, a promise of the number of prerendered pages.
 - API route results: `undefined` gives 204, objects are JSON with a charset, async generators stream, values JSON cannot encode give a clear 500, and a thrown error gives a plain-text 500 (stack only in development).
 - API routes answer `HEAD` (from `GET`, no body) and `OPTIONS` (204 with `Allow`, unless the route exports its own `OPTIONS`), and an unsupported method gets 405 with `Allow`.

@@ -440,6 +440,18 @@ In-memory client state resets across document navigations. Persist necessary sta
 
 **Route matching uses the decoded path.** TradJS decodes each path segment once and normalizes trailing slashes before matching. Encoded slashes, backslashes, control characters, dot segments, malformed encoding, and double encoding return 404. Do not build authorization assumptions around encoded-path distinctions.
 
+### Answering 404 from a page
+
+```tsx
+import { notFound } from "tradjs/server";
+
+export default async function Item({ params }: { params: { id: string } }) {
+  const item = await loadItem(params.id);
+  if (!item) notFound(); // 404 with the nearest not-found.tsx, never error.tsx
+  return <h1>{item.name}</h1>;
+}
+```
+
 ## 7. Critical Pitfalls
 
 1. **SSR validates HTML attributes and tag names.** Unsafe attribute names and values are not passed through unchecked. Event-handler attributes are removed regardless of case. `srcdoc` is rejected. Unsafe URL schemes are dropped from URL-bearing attributes. Title, viewport, and metadata values are escaped.
