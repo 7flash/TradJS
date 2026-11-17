@@ -5,11 +5,37 @@ const URL_ATTRIBUTES = new Set([
 ]);
 const IMAGE_ATTRIBUTES = new Set(["src", "srcset", "poster"]);
 const SAFE_IMAGE_DATA = /^data:image\/(?:png|jpe?g|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon)[;,]/i;
+
+function hasUnsafeCssUrl(value: unknown): boolean {
+  const css = String(value)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\\([0-9a-f]{1,6})\s?/gi, (_match, hex) => {
+      const cp = parseInt(hex, 16);
+      return String.fromCodePoint(
+        cp === 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)
+          ? 0xfffd
+          : cp,
+      );
+    })
+    .replace(/\\([^\r\n])/g, "$1")
+    .replace(/[\u0000-\u0020\u007f]/g, "")
+    .toLowerCase();
+
+  // javascript:/vbscript: never; data: only for raster images (inline
+  // backgrounds are common; data:image/svg+xml and data:text/html are not safe).
+  return [...css.matchAll(/url\(["']?([a-z]+):([^)"']*)/g)].some(([, scheme, rest]) => {
+    if (scheme === "javascript" || scheme === "vbscript") return true;
+    if (scheme !== "data") return false;
+    return !SAFE_IMAGE_DATA.test(`data:${rest}`);
+  });
+}
+
 /** URL attributes that would run code: javascript:/vbscript: anywhere, and
  *  data: except raster images in src, srcset and poster (data:image/svg+xml
  *  and data:text/html can run script). */
 export function isUnsafeUrlAttribute(name: string, value: unknown): boolean {
   const lower = name.toLowerCase();
+  if (lower === "style") return hasUnsafeCssUrl(value);
   if (!URL_ATTRIBUTES.has(lower)) return false;
   const urls = lower === "srcset" ? String(value).split(",") : [String(value)];
   return urls.some((raw) => {

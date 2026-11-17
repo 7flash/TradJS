@@ -4,6 +4,7 @@ import {
   isEventProp,
   isSafeHtmlName,
   isUnsafeUrlAttribute,
+  styleObjectToString,
 } from "../shared/attributes";
 export function eventDescriptor(key: string): {
   type: string;
@@ -36,7 +37,11 @@ export function setDomProp(el: Element, key: string, value: unknown): void {
   if (!isSafeHtmlName(key) || isEventProp(key)) return;
   const name = domAttributeName(el, key);
   if (!isSafeHtmlName(name) || isEventProp(name)) return;
-  if (name.toLowerCase() === "srcdoc" || isUnsafeUrlAttribute(name, value)) {
+  const checkedValue =
+    name.toLowerCase() === "style" && value && typeof value === "object"
+      ? styleObjectToString(value as Record<string, unknown>)
+      : value;
+  if (name.toLowerCase() === "srcdoc" || isUnsafeUrlAttribute(name, checkedValue)) {
     // Same rule as server rendering; also drop a value set by an earlier render.
     el.removeAttribute(name);
     return;

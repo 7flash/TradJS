@@ -70,11 +70,16 @@ function renderAttributes(propsObj: Record<string, any>): string {
     }
     if (value === undefined || value === null || value === false) continue;
     const name = attributeName(key);
+    // Check a style object as the CSS text it becomes (url(javascript:...)).
+    const checkedValue =
+      name.toLowerCase() === "style" && typeof value === "object"
+        ? styleObjectToString(value)
+        : value;
     // srcdoc is a whole HTML document; javascript:/vbscript:/data: URLs run code.
     if (
       !isSafeHtmlName(name) ||
       name.toLowerCase() === "srcdoc" ||
-      isUnsafeUrlAttribute(name, value)
+      isUnsafeUrlAttribute(name, checkedValue)
     ) {
       continue;
     }
