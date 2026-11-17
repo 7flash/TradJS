@@ -1,66 +1,38 @@
-import { describe, expect, test } from "bun:test";
-import {
-  hasActiveMeasurement,
-  measureRequired,
-  measures,
-} from "../src/server/measure";
-describe("measurement policy", () => {
-  test("required measurements preserve the original thrown value", async () => {
-    const cause = new Error("expected failure");
-    try {
-      await measureRequired(measures.route, "test failure", async () => {
-        throw cause;
-      });
-      throw new Error("measureRequired unexpectedly resolved");
-    } catch (error) {
-      expect(error).toBe(cause);
-    }
-  });
-  test("required measurements allow a successful null result", async () => {
-    const result = await measureRequired(
-      measures.route,
-      "nullable result",
-      async () => null,
-    );
-    expect(result).toBeNull();
-  });
-  test("nested framework measurements inherit an active trace context", async () => {
-    expect(hasActiveMeasurement()).toBe(false);
-    const result = await measureRequired(
-      measures.http,
-      "outer operation",
-      async () => {
-        expect(hasActiveMeasurement()).toBe(true);
-        return measureRequired(measures.build, "inner operation", async () => {
-          expect(hasActiveMeasurement()).toBe(true);
-          return 42;
-        });
-      },
-    );
-    expect(result).toBe(42);
-    expect(hasActiveMeasurement()).toBe(false);
-  });
+import { expect, test } from "bun:test";
+import { buildMeasure, httpMeasure } from "../src/server/measure";
+
+// The framework's measurement scopes (src/server/measure.ts) are plain
+// measure-fn scopes. These tests pin the behaviour the router relies on.
+
+test("a measured failure rethrows the original value", async () => {
+  const cause = new Error("expected failure");
+  let caught: unknown;
+  try {
+    await httpMeasure.measure("test failure", async () => {
+      throw cause;
+    });
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBe(cause);
 });
-test("measure-fn 4 receives labels, subsystem scopes, and explicit summaries", async () => {
+
+test("a measured null result stays null", async () => {
+  expect(await httpMeasure.measure("nullable result", async () => null)).toBeNull();
+});
+
+test("framework scopes nest and carry their scope names", async () => {
   const { configure, silent, logger } = await import("measure-fn");
   const events: any[] = [];
-  configure({ silent: false, logger: (event) => events.push(event) });
+  configure({ silent: false, logger: (event: any) => events.push(event) });
   try {
-    await measureRequired(measures.http, { label: "request" }, () =>
-      measureRequired(
-        measures.build,
-        { label: "compile", result: (value: number) => ({ bytes: value }) },
-        async () => 12,
-      ),
+    const result = await httpMeasure.measure("request", () =>
+      buildMeasure.measure("compile", async () => 12),
     );
+    expect(result).toBe(12);
     const starts = events.filter((event) => event.type === "start");
     expect(starts.map((event) => event.scope)).toEqual(["http", "build"]);
     expect(starts.map((event) => event.depth)).toEqual([0, 1]);
-    expect(starts[1].label).toContain("compile");
-    const success = events.find(
-      (event) => event.type === "success" && event.scope === "build",
-    );
-    expect(success.result).toEqual({ bytes: 12 });
   } finally {
     configure({ silent, logger });
   }

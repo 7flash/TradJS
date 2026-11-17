@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
-import { Fragment, jsx, render } from "../src/client/render";
+import { jsx, render } from "../src/client/render";
+import { Fragment } from "../src/client/types";
 
 let dom: JSDOM;
 let root: HTMLElement;
