@@ -137,3 +137,18 @@ test("async Head isolation and private SSR caching", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("more URL-attribute cases from the second review", () => {
+  expect(renderToString(node("svg", {}, ) as any)).toContain("<svg");
+  const use = renderToString(node("use", { "xlink:href": "javascript:alert(1)" }));
+  expect(use).not.toContain("javascript");
+  const btn = renderToString(node("button", { formAction: "javascript:alert(1)", FORMACTION: "vbscript:x" }));
+  expect(btn).not.toContain("javascript");
+  expect(btn).not.toContain("vbscript");
+  const split = renderToString(node("a", { href: "java\nscript:alert(1)" }));
+  expect(split).not.toContain("href=");
+  const tab = renderToString(node("a", { href: "\tjavascript:alert(1)" }));
+  expect(tab).not.toContain("href=");
+  const upper = renderToString(node("div", { ONMOUSEOVER: "x", OnClick: "y" }));
+  expect(upper.toLowerCase()).not.toContain("on");
+});
