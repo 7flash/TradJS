@@ -655,16 +655,49 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
           async () => {
             const apiModule = await import(match.route.filePath);
             const method = req.method.toUpperCase();
-            const handler = apiModule[method] || apiModule.default;
-            if (!handler) {
-              return new Response("Method Not Allowed", { status: 405 });
+            const exportedMethods = Object.keys(apiModule)
+              .filter(
+                (name) =>
+                  name !== "default" && typeof apiModule[name] === "function",
+              )
+              .map((name) => name.toUpperCase());
+            const allowedMethods = new Set(exportedMethods);
+            if (allowedMethods.has("GET")) allowedMethods.add("HEAD");
+            allowedMethods.add("OPTIONS");
+            const allow = [...allowedMethods].join(", ");
+
+            // Answer OPTIONS only when the route does not handle it itself
+            // (a CORS preflight handler or a default export).
+            if (method === "OPTIONS" && !apiModule.OPTIONS && !apiModule.default) {
+              return new Response(null, {
+                status: 204,
+                headers: { Allow: allow },
+              });
             }
-            const response = await handler(req, { params: match.params });
-            return response instanceof Response
-              ? response
-              : new Response(JSON.stringify(response), {
+
+            const handler =
+              apiModule[method] ||
+              (method === "HEAD" ? apiModule.GET : undefined) ||
+              apiModule.default;
+            if (!handler) {
+              return new Response("Method Not Allowed", {
+                status: 405,
+                headers: { Allow: allow },
+              });
+            }
+            const result = await handler(req, { params: match.params });
+            const response = result instanceof Response
+              ? result
+              : new Response(JSON.stringify(result), {
                   headers: { "Content-Type": "application/json" },
                 });
+            return method === "HEAD"
+              ? new Response(null, {
+                  status: response.status,
+                  statusText: response.statusText,
+                  headers: response.headers,
+                })
+              : response;
           },
         );
       }
