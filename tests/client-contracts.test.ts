@@ -200,13 +200,21 @@ describe("renderer ownership contracts", () => {
       "http://www.w3.org/1999/xhtml",
     );
   });
-  test("duplicate keys clear the selected target and allow an explicit recovery", () => {
-    render(h("div", null, h("b", { key: "a" }, "old")), root);
-    expect(() =>
-      render(h("div", null, h("b", { key: "x" }), h("b", { key: "x" })), root),
-    ).toThrow("Duplicate sibling key");
-    expect(root.textContent).toBe("");
-    render(h("div", null, h("b", { key: "a" }, "recovered")), root);
-    expect(root.textContent).toBe("recovered");
+  test("duplicate keys still render every item, warn once, and recover", () => {
+    const warn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (message: string) => warnings.push(String(message));
+    try {
+      render(h("div", null, h("b", { key: "a" }, "old")), root);
+      render(h("div", null, h("b", { key: "dup" }, "1"), h("b", { key: "dup" }, "2")), root);
+      expect(root.textContent).toBe("12");
+      render(h("div", null, h("b", { key: "dup" }, "3"), h("b", { key: "dup" }, "4")), root);
+      expect(root.textContent).toBe("34");
+      expect(warnings.filter((w) => w.includes('Duplicate sibling key "dup"'))).toHaveLength(1);
+      render(h("div", null, h("b", { key: "a" }, "recovered")), root);
+      expect(root.textContent).toBe("recovered");
+    } finally {
+      console.warn = warn;
+    }
   });
 });

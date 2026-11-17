@@ -347,6 +347,28 @@ function cachedPlacementAnchor(
   return cached.anchor;
 }
 
+const warnedDuplicateKeys = new Set<string>();
+
+/**
+ * Duplicate sibling keys still render (the reconciler matches them in
+ * order), but they are almost always a bug, so say so once per key.
+ */
+function warnDuplicateKeys(children: (VNode | Child)[]): void {
+  const seen = new Set<unknown>();
+  for (const child of children) {
+    if (!child || typeof child !== "object" || !("key" in child)) continue;
+    const key = (child as VNode).key;
+    if (key == null) continue;
+    if (seen.has(key)) {
+      const id = String(key);
+      if (!warnedDuplicateKeys.has(id)) {
+        warnedDuplicateKeys.add(id);
+        console.warn(`[tradjs] Duplicate sibling key "${id}"; give each item in a list its own key.`);
+      }
+    } else seen.add(key);
+  }
+}
+
 function diffChildren(
   parentFiber: Fiber,
   parentNode: Node,
@@ -359,6 +381,7 @@ function diffChildren(
     flatNew.some(
       (v) => v && typeof v === "object" && "key" in v && v.key != null,
     ) || oldFibers.some((f) => f.key != null);
+  if (hasKeys) warnDuplicateKeys(flatNew);
   const logicalParent = parentFiber.node === null;
   const oldLogicalNodes = logicalParent ? collectNodes(parentFiber) : [];
   const needsPlacement =
@@ -450,6 +473,27 @@ function syncControlledAncestors(container: Node): void {
   }
 }
 
+/**
+ * onClick -> "click", onClickCapture -> "click" in the capture phase,
+ * onDoubleClick -> "dblclick". The returned id keys fiber.listeners.
+ */
+function eventOf(key: string): { type: string; capture: boolean; id: string } {
+  let name = key.slice(2);
+  let capture = false;
+  if (name.length > 7 && name.endsWith("Capture")) {
+    capture = true;
+    name = name.slice(0, -7);
+  }
+  let type = name.toLowerCase();
+  if (type === "doubleclick") type = "dblclick";
+  return { type, capture, id: capture ? `${type}|capture` : type };
+}
+
+function removeListenerById(el: EventTarget, id: string, listener: EventListener): void {
+  const [type, phase] = id.split("|");
+  el.removeEventListener(type, listener, phase === "capture");
+}
+
 function patchProps(
   el: Element,
   oldProps: Props,
@@ -465,11 +509,11 @@ function patchProps(
       !(key.startsWith("on") && typeof safeNewProps[key] !== "function")
     ) continue;
     if (key.startsWith("on") && typeof safeOldProps[key] === "function") {
-      const event = key.slice(2).toLowerCase();
-      const oldListener = fiber.listeners.get(event);
+      const { id } = eventOf(key);
+      const oldListener = fiber.listeners.get(id);
       if (oldListener) {
-        el.removeEventListener(event, oldListener);
-        fiber.listeners.delete(event);
+        removeListenerById(el, id, oldListener);
+        fiber.listeners.delete(id);
       }
     } else if (isFormStateProp(el, key)) {
       setDomProp(el, key, null);
@@ -497,11 +541,11 @@ function patchProps(
     } else if (key === "style" && typeof value === "object") {
       assignElementStyle(el, value, true);
     } else if (key.startsWith("on") && typeof value === "function") {
-      const event = key.slice(2).toLowerCase();
-      const oldListener = fiber.listeners.get(event);
-      if (oldListener) el.removeEventListener(event, oldListener);
-      el.addEventListener(event, value);
-      fiber.listeners.set(event, value);
+      const { type, capture, id } = eventOf(key);
+      const oldListener = fiber.listeners.get(id);
+      if (oldListener) removeListenerById(el, id, oldListener);
+      el.addEventListener(type, value, capture);
+      fiber.listeners.set(id, value);
     } else if (key === "dangerouslySetInnerHTML") {
       el.innerHTML = value.__html;
     } else if (typeof value === "boolean") {
@@ -622,9 +666,16 @@ function patchFiber(
       if (oldVNode.props.ref !== newVNode.props.ref) {
         releaseRef(oldVNode.props.ref, el, oldFiber);
       }
+      // Raw HTML owns the element's content: unmount the old children first
+      // (disposing their listeners and refs) and render no children with it.
+      const raw = newVNode.props.dangerouslySetInnerHTML != null;
+      if (raw && oldFiber.children.length)
+        diffChildren(oldFiber, el, oldFiber.children, []);
       patchProps(el, oldVNode.props, newVNode.props, oldFiber);
-      const newChildVNodes = normalizeChildren(newVNode.props.children);
-      diffChildren(oldFiber, el, oldFiber.children, newChildVNodes);
+      if (!raw) {
+        const newChildVNodes = normalizeChildren(newVNode.props.children);
+        diffChildren(oldFiber, el, oldFiber.children, newChildVNodes);
+      }
       syncFormState(el, newVNode.props);
       oldFiber.vnode = newVNode;
       bindRef(
@@ -704,7 +755,9 @@ function mountVNode(
 
   applyProps(el, props, fiber);
 
-  const children = normalizeChildren(props.children);
+  // With raw HTML, the HTML is the content; children are ignored.
+  const children =
+    props.dangerouslySetInnerHTML != null ? [] : normalizeChildren(props.children);
   for (const child of children) {
     const childFiber = mountVNode(child, fiber, el);
     if (childFiber) fiber.children.push(childFiber);
@@ -814,7 +867,7 @@ function cleanupFiber(fiber: Fiber): void {
     }
     for (const [event, listener] of fiber.listeners) {
       try {
-        node.removeEventListener(event, listener);
+        removeListenerById(node, event, listener);
       } catch (error) {
         recordCleanupError(error);
       }
@@ -851,9 +904,9 @@ function applyProps(el: Element, props: Props, fiber: Fiber): void {
     } else if (key === "style" && typeof value === "object") {
       assignElementStyle(el, value);
     } else if (key.startsWith("on") && typeof value === "function") {
-      const event = key.slice(2).toLowerCase();
-      el.addEventListener(event, value);
-      fiber.listeners.set(event, value);
+      const { type, capture, id } = eventOf(key);
+      el.addEventListener(type, value, capture);
+      fiber.listeners.set(id, value);
     } else if (key === "dangerouslySetInnerHTML") {
       el.innerHTML = value.__html;
     } else if (value != null) {
