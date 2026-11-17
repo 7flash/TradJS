@@ -387,6 +387,9 @@ function diffChildren(
   const needsPlacement =
     logicalParent &&
     (oldLogicalNodes.length === 0 ||
+      // More children than before: new nodes must go before the next sibling,
+      // not at the end of the host element.
+      flatNew.length > oldFibers.length ||
       typeof effective === "function" ||
       effective === "replace" ||
       hasKeys);
