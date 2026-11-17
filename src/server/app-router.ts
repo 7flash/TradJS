@@ -103,12 +103,37 @@ function isDeclaredAsyncComponent(component: unknown): boolean {
   );
 }
 
+/** Longest an async page render may take before the request fails (ms). */
+export const SSR_TIMEOUT_MS = 30_000;
+
+/**
+ * A component that never resolves would otherwise hold the request open
+ * forever. After the deadline the request fails like any render error
+ * (error page, digest in the log); the component's own work is not stopped.
+ */
+function withRenderTimeout(render: Promise<string>, owner: string): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`[tradjs] ${owner}: async rendering took longer than ${renderTimeoutMs}ms`)),
+      renderTimeoutMs,
+    );
+  });
+  return Promise.race([render, deadline]).finally(() => clearTimeout(timer));
+}
+
+/** Test hook: shorten the render deadline. */
+let renderTimeoutMs = SSR_TIMEOUT_MS;
+export function setRenderTimeoutForTests(ms: number | null): void {
+  renderTimeoutMs = ms ?? SSR_TIMEOUT_MS;
+}
+
 function renderServerTree(
   tree: any,
   asyncMode: boolean,
   owner: string,
 ): string | Promise<string> {
-  if (asyncMode) return renderToStringAsync(tree);
+  if (asyncMode) return withRenderTimeout(renderToStringAsync(tree), owner);
 
   try {
     return renderToString(tree);
