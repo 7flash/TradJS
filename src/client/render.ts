@@ -44,6 +44,10 @@ const nodeOwners = new WeakMap<Node, Fiber>();
 const boundRefs = new WeakMap<Fiber, { ref: unknown; element: Element }>();
 let activeComponentFiber: Fiber | null = null;
 let renderInProgress = false;
+let activePlacementAnchors = new Map<
+  Fiber,
+  { parentNode: Node; anchor: Node | null }
+>();
 let activeRenderPass: RenderPass | null = null;
 let _renderScopedReconciler: ReconcilerName | Reconciler | null = null;
 
@@ -160,7 +164,23 @@ export function render(
       const previousFibers = snapshotFibers(rootFiber.children);
       try {
         const newChildren = vnode ? [vnode] : [];
+        // Raw HTML has no child fibers. Remove its unmanaged DOM before taking
+        // over the region, without modifying the caller-owned VNode.
+        const rootVNode = rootFiber.vnode;
+        if (
+          rootFiber.node === container &&
+          rootFiber.children.length === 0 &&
+          container.firstChild &&
+          rootVNode &&
+          typeof rootVNode === "object" &&
+          "type" in rootVNode &&
+          rootVNode.props?.dangerouslySetInnerHTML
+        ) {
+          cleanupNestedRoots(container, rootFiber);
+          removeContainerChildren(container);
+        }
         diffChildren(rootFiber, container, rootFiber.children, newChildren);
+        syncControlledAncestors(container);
       } catch (error) {
         rollbackRenderTarget(rootFiber, container, previousFibers);
         throw error;
@@ -178,6 +198,15 @@ function isElementNode(node: unknown): node is Element {
 
 function isTextNode(node: unknown): node is Text {
   return !!node && (node as Node).nodeType === 3;
+}
+
+function findHostParentNode(fiber: Fiber): Node | undefined {
+  let current: Fiber | null = fiber;
+  while (current) {
+    if (current.node) return current.node;
+    current = current.parent;
+  }
+  return undefined;
 }
 
 /** The document to create nodes in: the parent node's, else the render
@@ -304,6 +333,18 @@ function placeLogicalFiber(
   }
 }
 
+function cachedPlacementAnchor(
+  fiber: Fiber,
+  parentNode: Node,
+): Node | null | undefined {
+  const cached = activePlacementAnchors.get(fiber);
+  if (!cached || cached.parentNode !== parentNode) return undefined;
+  if (cached.anchor && cached.anchor.parentNode !== parentNode) {
+    return undefined;
+  }
+  return cached.anchor;
+}
+
 function diffChildren(
   parentFiber: Fiber,
   parentNode: Node,
@@ -324,48 +365,86 @@ function diffChildren(
       typeof effective === "function" ||
       effective === "replace" ||
       hasKeys);
+  const cached = cachedPlacementAnchor(parentFiber, parentNode);
   const placementAnchor = needsPlacement
-    ? findPlacementAnchor(parentFiber, parentNode)
+    ? cached !== undefined
+      ? cached
+      : findPlacementAnchor(parentFiber, parentNode)
     : null;
 
-  if (typeof effective === "function") {
-    effective(parentFiber, parentNode, oldFibers, flatNew, reconcilerCtx);
+  // Capture anchors before a reconciler starts replacing parent.children.
+  // Empty components and fragments can acquire DOM nodes during this pass;
+  // their placement must still be relative to the original following sibling.
+  const previousAnchors = activePlacementAnchors;
+  const nextAnchors = new Map(previousAnchors);
+  for (const child of oldFibers) {
+    if (child.node === null) {
+      nextAnchors.set(child, {
+        parentNode,
+        anchor: findPlacementAnchor(child, parentNode),
+      });
+    }
+  }
+  activePlacementAnchors = nextAnchors;
+  try {
+    if (typeof effective === "function") {
+      effective(parentFiber, parentNode, oldFibers, flatNew, reconcilerCtx);
+      if (needsPlacement) {
+        placeLogicalFiber(parentFiber, parentNode, placementAnchor);
+      }
+      return;
+    }
+
+    if (effective === "replace") {
+      RECONCILERS.replace(
+        parentFiber,
+        parentNode,
+        oldFibers,
+        flatNew,
+        reconcilerCtx,
+      );
+    } else if (effective === "sequential") {
+      sequentialReconciler(
+        parentFiber,
+        parentNode,
+        oldFibers,
+        flatNew,
+        reconcilerCtx,
+      );
+    } else if (hasKeys) {
+      keyedReconciler(
+        parentFiber,
+        parentNode,
+        oldFibers,
+        flatNew,
+        reconcilerCtx,
+      );
+    } else {
+      sequentialReconciler(
+        parentFiber,
+        parentNode,
+        oldFibers,
+        flatNew,
+        reconcilerCtx,
+      );
+    }
+
     if (needsPlacement) {
       placeLogicalFiber(parentFiber, parentNode, placementAnchor);
     }
-    return;
+  } finally {
+    activePlacementAnchors = previousAnchors;
   }
+}
 
-  if (effective === "replace") {
-    RECONCILERS.replace(
-      parentFiber,
-      parentNode,
-      oldFibers,
-      flatNew,
-      reconcilerCtx,
-    );
-  } else if (effective === "sequential") {
-    sequentialReconciler(
-      parentFiber,
-      parentNode,
-      oldFibers,
-      flatNew,
-      reconcilerCtx,
-    );
-  } else if (hasKeys) {
-    keyedReconciler(parentFiber, parentNode, oldFibers, flatNew, reconcilerCtx);
-  } else {
-    sequentialReconciler(
-      parentFiber,
-      parentNode,
-      oldFibers,
-      flatNew,
-      reconcilerCtx,
-    );
-  }
-
-  if (needsPlacement) {
-    placeLogicalFiber(parentFiber, parentNode, placementAnchor);
+function syncControlledAncestors(container: Node): void {
+  for (let node: Node | null = container; node; node = node.parentNode) {
+    if (!isElementNode(node)) continue;
+    const fiber = nodeOwners.get(node);
+    const vnode = fiber?.vnode;
+    if (vnode && typeof vnode === "object" && "type" in vnode) {
+      syncFormState(node, vnode.props || {});
+    }
   }
 }
 
@@ -583,10 +662,12 @@ function mountVNode(
     return null;
   }
 
+  const hostParentNode = parentNode ?? findHostParentNode(parentFiber);
+
   if (typeof vnode === "string" || typeof vnode === "number") {
     const fiber = createFiber(vnode, parentFiber);
-    fiber.node = documentFor(fiber, parentNode).createTextNode(String(vnode));
-    if (parentNode) parentNode.appendChild(fiber.node);
+    fiber.node = documentFor(fiber, hostParentNode).createTextNode(String(vnode));
+    if (hostParentNode) hostParentNode.appendChild(fiber.node);
     return fiber;
   }
 
@@ -597,7 +678,7 @@ function mountVNode(
     const fiber = createFiber(vnode, parentFiber);
     const children = normalizeChildren(props.children);
     for (const child of children) {
-      const childFiber = mountVNode(child, fiber, parentNode);
+      const childFiber = mountVNode(child, fiber, hostParentNode);
       if (childFiber) fiber.children.push(childFiber);
     }
     return fiber;
@@ -608,14 +689,14 @@ function mountVNode(
     const result = executeComponent(fiber, type as Component, props);
     const children = flattenChildren([result]);
     for (const child of children) {
-      const childFiber = mountVNode(child, fiber, parentNode);
+      const childFiber = mountVNode(child, fiber, hostParentNode);
       if (childFiber) fiber.children.push(childFiber);
     }
     return fiber;
   }
 
   const fiber = createFiber(vnode, parentFiber);
-  const el = createDomElement(type as string, parentNode, documentFor(fiber, parentNode));
+  const el = createDomElement(type as string, hostParentNode, documentFor(fiber, hostParentNode));
   fiber.node = el;
   nodeOwners.set(el, fiber);
 
@@ -627,7 +708,7 @@ function mountVNode(
     if (childFiber) fiber.children.push(childFiber);
   }
   syncFormState(el, props);
-  if (parentNode) parentNode.appendChild(el);
+  if (hostParentNode) hostParentNode.appendChild(el);
   bindRef(props.ref, el, fiber, vnodeOwners.get(vnode) ?? null);
 
   return fiber;
