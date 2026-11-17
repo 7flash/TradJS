@@ -5,7 +5,7 @@ import { routeMeasure } from "./measure";
 const CONVENTION_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js"] as const;
 // Match canonical path segments, not the encoded URL spelling.
 // Never treat an encoded slash or backslash as part of a route parameter.
-function canonicalPathname(pathname: string): string | null {
+export function canonicalPathname(pathname: string): string | null {
   if (!pathname.startsWith("/")) return null;
   const rawSegments = pathname.split("/");
   if (rawSegments.length > 2 && rawSegments.at(-1) === "")

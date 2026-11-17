@@ -129,3 +129,15 @@ describe("SSG output keeps client assets", () => {
     expect(html).toContain('"type":"page"');
   }, 30_000);
 });
+
+describe("canonical pathname downstream", () => {
+  test("a trailing slash gives layouts the same pathname", async () => {
+    const handler = createAppRouter({ appDir: showcaseDir, defaultTitle: "Test" });
+    const a = await get(handler, "/counter");
+    const b = await get(handler, "/counter/");
+    const current = (html: string) =>
+      [...html.matchAll(/<a\b[^>]*aria-current="page"[^>]*>/g)].map((m) => m[0]);
+    expect(current(b.html)).toEqual(current(a.html));
+    expect(current(b.html)[0]).toContain('href="/counter"');
+  });
+});

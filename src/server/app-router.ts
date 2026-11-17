@@ -1,7 +1,7 @@
 import path from "path";
 import { existsSync } from "fs";
 import { dedent } from "ts-dedent";
-import { discoverRoutes, matchRoute } from "./router";
+import { canonicalPathname, discoverRoutes, matchRoute } from "./router";
 import { createElement } from "../client/render";
 import { renderToString, renderToStringAsync } from "./ssr";
 import { collectHeadAsync } from "./head";
@@ -564,8 +564,10 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
 
   return async (req: Request) => {
     const url = new URL(req.url);
-    const pathname = url.pathname;
-    const match = matchRoute(pathname, routes);
+    // The decoded, normalized path: what route matching used, so layouts
+    // and the SSG cache see one pathname for /a and /a/.
+    const pathname = canonicalPathname(url.pathname) ?? url.pathname;
+    const match = matchRoute(url.pathname, routes);
 
     if (!match) {
       const notFoundHtml = injectViewTransitions(
