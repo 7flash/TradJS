@@ -27,6 +27,7 @@ import { serve as serveHttp } from "./serve";
 import { withoutResponseBody } from "./response";
 import { isNotFound } from "./not-found";
 import { csrfRejection } from "./csrf";
+import { publicFileResponse, resolvePublicFile } from "./public-files";
 import { httpMeasure } from "./measure";
 import type {
   Handler,
@@ -576,6 +577,10 @@ export function createAppRouter(
       : options.csrf === true || options.csrf === undefined
         ? {}
         : options.csrf;
+  const publicRoot =
+    options.publicDir === false
+      ? undefined
+      : path.resolve(options.publicDir ?? path.join(appDir, "..", "public"));
   const routes = discoverRoutes(appDir);
 
   console.log(`📁 Discovered ${routes.length} routes:`);
@@ -760,6 +765,11 @@ export function createAppRouter(
     const match = matchRoute(url.pathname, routes);
 
     if (!match) {
+      // No route: a file from the public folder, if one matches exactly.
+      if (publicRoot && (req.method === "GET" || req.method === "HEAD")) {
+        const file = resolvePublicFile(publicRoot, url.pathname);
+        if (file) return publicFileResponse(req, file, { cacheControl: options.publicCacheControl });
+      }
       const custom = await renderUnmatchedNotFound(pathname);
       if (custom) return custom;
       const notFoundHtml = injectViewTransitions(

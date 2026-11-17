@@ -577,6 +577,15 @@ createAppRouter({ csrf: false }); // turn the check off
 
 Behind a proxy that rewrites the `Host` header, list the public origin in `allowedOrigins`.
 
+### Static files
+
+Files in a `public/` folder next to `app/` are served as they are: `public/robots.txt` at `/robots.txt`, `public/img/logo.svg` at `/img/logo.svg`. An app route wins over a file with the same path. Responses carry an `ETag` (so browsers revalidate with `304`), support `Range` requests for media, and use `Cache-Control: public, max-age=0, must-revalidate` unless you set `publicCacheControl`. Dotfiles (`.env`, `.git`) and anything outside the folder are never served.
+
+```ts
+createAppRouter({ publicDir: "./static", publicCacheControl: "public, max-age=3600" });
+createAppRouter({ publicDir: false }); // no static files
+```
+
 ### 9. Error boundaries
 
 Create `error.tsx` alongside a route or in a parent directory:

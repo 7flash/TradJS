@@ -5,6 +5,7 @@
 ### Added
 
 - Request `locals`: middleware writes, layouts/pages/error pages read the `locals` prop, API handlers read `ctx.locals`. Types `Locals`, `RouteContext`, `PageProps` from `tradjs/server`.
+- Static files from `public/` (option `publicDir`, `publicCacheControl`): routes win, ETag/304, Range, HEAD; dotfiles and paths outside the folder are never served.
 
 ### Security
 
