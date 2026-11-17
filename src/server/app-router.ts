@@ -598,6 +598,56 @@ export function createAppRouter(
     }
   }
 
+  /**
+   * A URL no route matches gets the nearest not-found page: start in the
+   * deepest app folder the URL names, walk up to appDir, and wrap it in the
+   * layouts from appDir down to that page's folder.
+   */
+  const renderUnmatchedNotFound = async (pathname: string): Promise<Response | undefined> => {
+    const root = path.resolve(appDir);
+    let dir = root;
+    for (const segment of pathname.split("/").filter(Boolean)) {
+      const next = path.join(dir, segment);
+      if (!next.startsWith(root + path.sep) || !existsSync(next)) break;
+      dir = next;
+    }
+    const boundary = nearestNotFoundFile(path.join(dir, "page.tsx"), appDir);
+    if (!boundary) return undefined;
+    try {
+      const mod = await import(boundary);
+      if (typeof mod.default !== "function") return undefined;
+      const layouts: string[] = [];
+      let current = root;
+      const parts = path.relative(root, path.dirname(boundary)).split(path.sep).filter(Boolean);
+      for (let i = 0; i <= parts.length; i++) {
+        for (const ext of [".tsx", ".ts", ".jsx", ".js"]) {
+          const file = path.join(current, `layout${ext}`);
+          if (existsSync(file)) { layouts.push(file); break; }
+        }
+        if (i < parts.length) current = path.join(current, parts[i]!);
+      }
+      const wrapped = await wrapWithLayouts(createElement(mod.default, {}), layouts, pathname);
+      let html = `<!DOCTYPE html>${await renderServerTree(
+        wrapped.tree,
+        isDeclaredAsyncComponent(mod.default) || wrapped.hasAsyncLayout,
+        "not-found page",
+      )}`;
+      if (globalCss) {
+        try {
+          const stylesPath = await buildStyle(globalCss);
+          html = html.replace("</head>", `<link rel="stylesheet" href="${stylesPath}"></head>`);
+        } catch {}
+      }
+      return new Response(injectViewTransitions(html, viewTransitions), {
+        status: 404,
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    } catch (error) {
+      console.error("not-found page failed:", error);
+      return undefined;
+    }
+  };
+
   const renderSSGRoute = async (route: any, params: Record<string, string> = {}) => {
     const pageModule = await import(route.filePath);
     const PageComponent = pageModule.default || pageModule.Page;
@@ -691,13 +741,15 @@ export function createAppRouter(
     const match = matchRoute(url.pathname, routes);
 
     if (!match) {
+      const custom = await renderUnmatchedNotFound(pathname);
+      if (custom) return custom;
       const notFoundHtml = injectViewTransitions(
         BUILT_IN_NOT_FOUND,
         viewTransitions,
       );
       return new Response(notFoundHtml, {
         status: 404,
-        headers: { "Content-Type": "text/html" },
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
       });
     }
 
@@ -813,6 +865,15 @@ export function createAppRouter(
               const result = await handler(req, { params: match.params });
               response = apiResultResponse(result);
             } catch (error) {
+              if (isNotFound(error)) {
+                response = new Response("Not Found", {
+                  status: 404,
+                  headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+                });
+                return method === "HEAD"
+                  ? new Response(null, { status: 404, headers: response.headers })
+                  : response;
+              }
               console.error(`API ${match.route.pattern} failed:`, error);
               // The stack only in development; never internals in production.
               response = new Response(
