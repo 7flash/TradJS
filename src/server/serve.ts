@@ -33,10 +33,21 @@ function isAddressInUseError(error: unknown): boolean {
     message.includes("EACCES")
   );
 }
-function createErrorResponse(error: unknown, requestId: string): Response {
+/** Loopback addresses: the detailed dev error page is only shown to this machine. */
+export function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const a = address.toLowerCase();
+  return a === "::1" || a === "localhost" || a.startsWith("127.") || a.startsWith("::ffff:127.");
+}
+
+function createErrorResponse(
+  error: unknown,
+  requestId: string,
+  detailed = isDev,
+): Response {
   const message = errorMessage(error);
   const stack = errorStack(error);
-  const body = isDev
+  const body = detailed
     ? `<!DOCTYPE html>
 <html>
   <head>
@@ -62,7 +73,7 @@ function createErrorResponse(error: unknown, requestId: string): Response {
   return new Response(body, {
     status: 500,
     headers: {
-      "Content-Type": isDev
+      "Content-Type": detailed
         ? "text/html; charset=utf-8"
         : "text/plain; charset=utf-8",
       "Cache-Control": "no-store",
@@ -147,7 +158,7 @@ export async function serve(handler: Handler, options: HttpServeOptions = {}) {
   const args: Record<string, unknown> = {
     idleTimeout: 0,
     development: isDev,
-    async fetch(req: Request) {
+    async fetch(req: Request, bunServer?: { requestIP(req: Request): { address: string } | null }) {
       const suppliedId = req.headers.get("X-Request-ID") ?? "";
       const requestId = /^[A-Za-z0-9_.:-]{1,128}$/.test(suppliedId)
         ? suppliedId
@@ -219,7 +230,10 @@ export async function serve(handler: Handler, options: HttpServeOptions = {}) {
           },
         );
       } catch (error) {
-        const response = createErrorResponse(error, requestId);
+        // NODE_ENV is often left unset in deployments, and Bun listens on all
+        // interfaces: stacks and error details go only to local requests.
+        const local = isLoopbackAddress(bunServer?.requestIP?.(req)?.address);
+        const response = createErrorResponse(error, requestId, isDev && local);
         return req.method === "HEAD" ? withoutResponseBody(response) : response;
       }
     },
