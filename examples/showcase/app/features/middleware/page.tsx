@@ -104,8 +104,8 @@ export default async function middleware(req: Request) {
             <strong>Logging</strong> — log every request with timing information
           </li>
           <li>
-            <strong>CORS headers</strong> — add Access-Control headers to API
-            responses
+            <strong>Request blocking</strong> — return a 403 response for
+            disallowed requests
           </li>
           <li>
             <strong>A/B testing</strong> — set cookies to route users to

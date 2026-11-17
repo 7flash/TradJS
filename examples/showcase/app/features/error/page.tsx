@@ -58,11 +58,15 @@ export default function ErrorBoundary({ error, pathname }) {
   return (
     <div>
       <h1>Something went wrong</h1>
-      <p>{error}</p>
+      <p>{error.message}</p>
+      {error.digest && <small>Reference: {error.digest}</small>}
       <a href={pathname}>Try again</a>
     </div>
   );
 }
+
+// In production, error.message is generic; error.digest
+// matches the corresponding entry in the server log.
 
 // The error boundary is wrapped in the page's layouts,
 // so your sidebar/header stays intact even on errors.
@@ -88,16 +92,22 @@ export default function ErrorBoundary({ error, pathname }) {
             up the directory tree wins
           </li>
           <li>
-            <strong>Props</strong> — receives <code>error</code> (message
-            string) and <code>pathname</code>
+            <strong>Props</strong> — receives <code>error</code> (an object with
+            <code>message</code>, optional <code>stack</code>, and{" "}
+            <code>digest</code>) and <code>pathname</code>
           </li>
           <li>
             <strong>Fallback</strong> — if <code>error.tsx</code> itself
             crashes, a generic 500 page is shown
           </li>
           <li>
-            <strong>Dev mode</strong> — shows full stack trace in the error
-            message
+            <strong>Dev mode</strong> — can include <code>error.stack</code> for
+            debugging
+          </li>
+          <li>
+            <strong>Production mode</strong> — shows a generic{" "}
+            <code>error.message</code> and <code>error.digest</code> matching
+            an entry in the server log
           </li>
         </ul>
       </div>
