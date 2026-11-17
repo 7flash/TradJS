@@ -847,6 +847,7 @@ async function _buildScopedStyleImpl(
     },
   );
   const scopedRoot = postcss.parse(result.css || "", { from: absolutePath });
+  (await import("./css-keyframes")).namespaceKeyframes(scopedRoot, routePattern);
   scopedRoot.walkRules((rule) => {
     if (isInsideKeyframes(rule)) return;
     rule.selector = scopeSelectorList(rule.selector, routePattern);
