@@ -69,4 +69,12 @@ export interface AppRouterOptions {
   globalCss?: string;
   /** Enable same-origin cross-document View Transitions (default: true). */
   viewTransitions?: boolean;
+  /**
+   * Folder of static files served as-is (default: `public` next to the app
+   * folder; `false` turns it off). App routes win over a file with the same
+   * path. Dotfiles and anything outside the folder are never served.
+   */
+  publicDir?: string | false;
+  /** Cache-Control for public files (default: `public, max-age=0, must-revalidate`). */
+  publicCacheControl?: string;
 }

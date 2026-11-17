@@ -2,6 +2,10 @@
 
 ## 4.6.0 (2026-11-17)
 
+### Added
+
+- Static files from `public/` (option `publicDir`, `publicCacheControl`): routes win, ETag/304, Range, HEAD; dotfiles and paths outside the folder are never served.
+
 ### Security
 
 - WebSocket upgrades from another site (a browser `Origin` that is not the app's own) are refused with 403; allow extra sites with `serve(handler, { websocketOrigins: [...] })`.
