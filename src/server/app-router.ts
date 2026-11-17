@@ -391,6 +391,52 @@ export async function renderPage(options: RenderPageOptions): Promise<string> {
   );
 }
 
+/** Turn what an API handler returned into a Response. */
+function apiResultResponse(result: unknown): Response {
+  if (result instanceof Response) return result;
+  if (result === undefined) return new Response(null, { status: 204 });
+  if (
+    result !== null &&
+    typeof result === "object" &&
+    typeof (result as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function"
+  ) {
+    // Async iterables stream as chunked text; each item is one chunk.
+    const iterator = (result as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const item = await iterator.next();
+          if (item.done) controller.close();
+          else
+            controller.enqueue(
+              item.value instanceof Uint8Array ? item.value : encoder.encode(String(item.value)),
+            );
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        await iterator.return?.(reason);
+      },
+    });
+    return new Response(stream, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+  }
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(result);
+  } catch {
+    json = undefined;
+  }
+  if (json === undefined) {
+    return new Response(
+      "API response is not JSON-serializable (BigInt, circular references and functions are not supported)",
+      { status: 500, headers: { "Content-Type": "text/plain; charset=utf-8" } },
+    );
+  }
+  return new Response(json, { headers: { "Content-Type": "application/json; charset=utf-8" } });
+}
+
 /** Route-scoped stylesheet (`page.css` beside the page), shared by SSR and SSG. */
 async function buildRouteScopedStyle(
   routeFilePath: string,
@@ -690,12 +736,22 @@ export function createAppRouter(options: AppRouterOptions = {}): Handler {
                 headers: { Allow: allow },
               });
             }
-            const result = await handler(req, { params: match.params });
-            const response = result instanceof Response
-              ? result
-              : new Response(JSON.stringify(result), {
-                  headers: { "Content-Type": "application/json" },
-                });
+            let response: Response;
+            try {
+              const result = await handler(req, { params: match.params });
+              response = apiResultResponse(result);
+            } catch (error) {
+              console.error(`API ${match.route.pattern} failed:`, error);
+              // The stack only in development; never internals in production.
+              response = new Response(
+                isDev
+                  ? error instanceof Error
+                    ? error.stack || error.message
+                    : String(error)
+                  : "Internal Server Error",
+                { status: 500, headers: { "Content-Type": "text/plain; charset=utf-8" } },
+              );
+            }
             return method === "HEAD"
               ? new Response(null, {
                   status: response.status,
