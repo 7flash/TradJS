@@ -9,6 +9,7 @@
 - In 4.5.1, unsafe SSR attribute names and values could cause attribute injection, and unescaped page titles could inject HTML or scripts. SSR now validates HTML attribute and tag names, removes event handlers regardless of case, rejects `srcdoc` and unsafe URL schemes, and escapes title, viewport, and metadata values.
 - In 4.5.1, concurrent requests could share `<Head>` elements, causing titles and metadata from one request to appear in another response. Each page, layout, and SSG render now isolates its own `<Head>` elements.
 - `<Head>` now also rejects executable URLs and `srcdoc` attributes, consistent with SSR attribute handling.
+- The server's detailed error page (message, stack, details) is shown only to requests from the same machine, even when `NODE_ENV` is not set to `production`.
 - In 4.5.1, a route's `error.tsx` received the raw error message in production, which could expose SQL, file paths or other internals. In production it now gets a generic message and an `error.digest` that matches the server log line.
 - The client renderer applies the same attribute and URL rules as server rendering, so a `javascript:` link or `srcdoc` set from the browser is dropped too.
 - `style` values are checked too: `url(javascript:...)`, `url(vbscript:...)` and non-image `data:` URLs (including CSS-escaped spellings) drop the style attribute, on server and client. Raster `data:image/*` backgrounds stay allowed.
