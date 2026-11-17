@@ -114,7 +114,8 @@
   "scripts": {
     "clean": "bun -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
     "prebuild": "bun run clean",
-    "build": "tsc",
+    "build": "tsc && bun scripts/fix-dts-extensions.ts",
+    "test:types": "bun run build && bun scripts/check-package-types.ts",
     "typecheck": "tsc --noEmit --emitDeclarationOnly false",
     "test": "bun test",
     "check": "bun run typecheck && bun test",

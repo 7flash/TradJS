@@ -88,7 +88,10 @@ function parsePort(value: string | undefined): number | undefined {
     ? port
     : undefined;
 }
-export async function serve(handler: Handler, options: HttpServeOptions = {}) {
+export async function serve(
+  handler: Handler,
+  options: HttpServeOptions = {},
+): Promise<ReturnType<typeof Bun.serve>> {
   if (options.port !== undefined && options.unix !== undefined)
     throw new Error("Cannot specify both port and unix socket");
   if (options.unix !== undefined && !options.unix)
