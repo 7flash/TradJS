@@ -4,6 +4,7 @@
 
 ### Security
 
+- WebSocket upgrades from another site (a browser `Origin` that is not the app's own) are refused with 403; allow extra sites with `serve(handler, { websocketOrigins: [...] })`.
 - In 4.5.1, prerendered SSG pages could be served without running middleware, allowing protected pages to bypass authentication checks. Middleware now runs before cached pages are served.
 - In 4.5.1, dynamic SSR responses were publicly cacheable for up to one hour, potentially exposing one user's HTML to another user through a shared cache. Dynamic pages and middleware-protected SSG pages now use `Cache-Control: no-store`.
 - In 4.5.1, unsafe SSR attribute names and values could cause attribute injection, and unescaped page titles could inject HTML or scripts. SSR now validates HTML attribute and tag names, removes event handlers regardless of case, rejects `srcdoc` and unsafe URL schemes, and escapes title, viewport, and metadata values.
