@@ -97,8 +97,9 @@ export function setElementClass(el: Element, value: unknown): void {
     else el.setAttribute("class", String(value));
     return;
   }
-  (el as HTMLElement).className =
-    value == null || value === false ? "" : String(value);
+  // A removed class leaves no attribute, matching a fresh render.
+  if (value == null || value === false) el.removeAttribute("class");
+  else (el as HTMLElement).className = String(value);
 }
 export function assignElementStyle(
   el: Element,

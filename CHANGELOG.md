@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.6.2 (2026-11-18)
+
+### Security
+- Client re-renders now apply the same attribute rules as the first render. An update that changed `href`, `src`, `action` or another URL attribute to `javascript:` or executable `data:`, or set `srcdoc`, was written to the DOM unchecked (4.6.0 only covered the first render).
+
+### Fixed
+- Removing `className` on a re-render removes the `class` attribute instead of leaving `class=""`.
+- Siblings that share a duplicate `key` keep their DOM nodes on reorder; all but the last were recreated (losing focus and typed input). Duplicate keys still warn.
+
+### Tests
+- `tests/renderer-matrix.test.ts`: 64 seeds x 80 random updates and 216 exhaustive three-step sequences (insert, remove, move, reverse, shuffle, keys on/off, duplicate keys, prop changes, wrapper and type changes, raw HTML), each compared with a fresh render of the same tree, plus event and form-state checks.
+
 ## 4.6.1 (2026-11-18)
 
 ### Security

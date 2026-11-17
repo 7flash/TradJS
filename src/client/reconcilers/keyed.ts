@@ -44,11 +44,15 @@ export const keyedReconciler: Reconciler = (
   newVNodes,
   ctx,
 ) => {
-  const oldKeyMap = new Map<string | number, AnyFiber>();
+  const oldKeyMap = new Map<string | number, AnyFiber[]>();
   const oldIndexMap = new Map<AnyFiber, number>();
   for (let i = 0; i < oldFibers.length; i++) {
     const fiber = oldFibers[i] as AnyFiber;
-    if (fiber.key != null) oldKeyMap.set(fiber.key, fiber);
+    if (fiber.key != null) {
+      const matches = oldKeyMap.get(fiber.key) ?? [];
+      matches.push(fiber);
+      oldKeyMap.set(fiber.key, matches);
+    }
     oldIndexMap.set(fiber, i);
   }
   const newFibers: AnyFiber[] = [];
@@ -63,7 +67,7 @@ export const keyedReconciler: Reconciler = (
     const positional = oldFibers[i];
     const oldFiber =
       key != null
-        ? oldKeyMap.get(key)
+        ? oldKeyMap.get(key)?.find((fiber) => !usedOldFibers.has(fiber))
         : positional?.key == null
           ? positional
           : undefined;

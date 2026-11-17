@@ -518,16 +518,11 @@ function patchProps(
         removeListenerById(el, id, oldListener);
         fiber.listeners.delete(id);
       }
-    } else if (isFormStateProp(el, key)) {
-      setDomProp(el, key, null);
     } else if (key === "dangerouslySetInnerHTML") {
       el.innerHTML = "";
-    } else if (key === "className" || key === "class") {
-      setElementClass(el, "");
-    } else if (key === "style") {
-      el.removeAttribute("style");
     } else {
-      el.removeAttribute(domAttributeName(el, key));
+      // Removals must obey the same attribute and form-property rules as mounts.
+      setDomProp(el, key, null);
     }
   }
 
@@ -539,25 +534,15 @@ function patchProps(
       continue;
     }
     if (safeOldProps[key] === value) continue;
-    if (key === "className" || key === "class") {
-      setElementClass(el, value);
-    } else if (key === "style" && typeof value === "object") {
-      assignElementStyle(el, value, true);
-    } else if (key.startsWith("on") && typeof value === "function") {
+    if (key.startsWith("on") && typeof value === "function") {
       const { type, capture, id } = eventOf(key);
       const oldListener = fiber.listeners.get(id);
       if (oldListener) removeListenerById(el, id, oldListener);
       el.addEventListener(type, value, capture);
       fiber.listeners.set(id, value);
-    } else if (key === "dangerouslySetInnerHTML") {
-      el.innerHTML = value.__html;
-    } else if (typeof value === "boolean") {
-      if (value) el.setAttribute(domAttributeName(el, key), "");
-      else el.removeAttribute(domAttributeName(el, key));
-    } else if (value != null) {
-      el.setAttribute(domAttributeName(el, key), String(value));
     } else {
-      el.removeAttribute(domAttributeName(el, key));
+      // In particular, never bypass URL / srcdoc validation on updates.
+      setDomProp(el, key, value);
     }
   }
 }
