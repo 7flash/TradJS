@@ -5,6 +5,65 @@
  * so declarations, strings, URLs, comments, and at-rule payloads are untouched.
  */
 
+// Skip opaque lexical regions when looking for functional pseudo boundaries.
+function opaqueEnd(s: string, i: number): number {
+  if (s.startsWith("/*", i)) {
+    const end = s.indexOf("*/", i + 2);
+    return end < 0 ? s.length : end + 2;
+  }
+  if (s[i] === "\\") return Math.min(s.length, i + 2);
+  if (s[i] !== "[" && s[i] !== "'" && s[i] !== '"') return i;
+  let depth = s[i] === "[" ? 1 : 0;
+  let quote: string | null = depth ? null : s[i];
+  for (let j = i + 1; j < s.length; j++) {
+    const c = s[j];
+    if (c === "\\") { j++; continue; }
+    if (quote) {
+      if (c === quote) { quote = null; if (!depth) return j + 1; }
+      continue;
+    }
+    if (s.startsWith("/*", j)) { j = opaqueEnd(s, j) - 1; continue; }
+    if (c === "'" || c === '"') { quote = c; continue; }
+    if (c === "[") depth++;
+    if (c === "]" && --depth === 0) return j + 1;
+  }
+  return s.length;
+}
+
+function closingParen(s: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < s.length; i++) {
+    const end = opaqueEnd(s, i);
+    if (end > i) { i = end - 1; continue; }
+    if (s[i] === "(") depth++;
+    if (s[i] === ")" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function unwrapGlobals(s: string): string {
+  let out = "";
+  for (let i = 0; i < s.length;) {
+    const end = opaqueEnd(s, i);
+    if (end > i) { out += s.slice(i, end); i = end; continue; }
+    if (s.startsWith(":global(", i)) {
+      const close = closingParen(s, i + 7);
+      if (close >= 0) { out += unwrapGlobals(s.slice(i + 8, close)); i = close + 1; continue; }
+    }
+    out += s[i++];
+  }
+  return out;
+}
+
+function hasLexicalToken(s: string, token: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const end = opaqueEnd(s, i);
+    if (end > i) { i = end - 1; continue; }
+    if (s.startsWith(token, i)) return true;
+  }
+  return false;
+}
+
 function isIdentChar(ch: string | undefined): boolean {
   return !!ch && /[A-Za-z0-9_-]/.test(ch);
 }
@@ -57,6 +116,11 @@ export function splitSelectorList(selector: string): string[] {
     }
     if (quote) {
       if (ch === quote) quote = null;
+      continue;
+    }
+    if (selector.startsWith("/*", i)) {
+      const end = selector.indexOf("*/", i + 2);
+      i = end < 0 ? selector.length : end + 1;
       continue;
     }
     if (ch === "'" || ch === '"') {
@@ -124,6 +188,20 @@ export function rewriteClassSelectors(
       if (ch === quote) quote = null;
       i++;
       continue;
+    }
+    if (selector.startsWith("/*", i)) {
+      const end = opaqueEnd(selector, i);
+      output += selector.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (bracketDepth === 0 && selector.startsWith(":global(", i)) {
+      const end = closingParen(selector, i + 7);
+      if (end >= 0) {
+        output += selector.slice(i, end + 1);
+        i = end + 1;
+        continue;
+      }
     }
     if (ch === "'" || ch === '"') {
       quote = ch;
@@ -196,6 +274,11 @@ function findTopLevelTypeSelector(selector: string, name: string): number {
       if (ch === quote) quote = null;
       continue;
     }
+    if (selector.startsWith("/*", i)) {
+      const end = selector.indexOf("*/", i + 2);
+      i = end < 0 ? selector.length : end + 1;
+      continue;
+    }
     if (ch === "'" || ch === '"') {
       quote = ch;
       continue;
@@ -260,6 +343,11 @@ function findTopLevelRootPseudo(selector: string): number {
       if (ch === quote) quote = null;
       continue;
     }
+    if (selector.startsWith("/*", i)) {
+      const end = selector.indexOf("*/", i + 2);
+      i = end < 0 ? selector.length : end + 1;
+      continue;
+    }
     if (ch === "'" || ch === '"') {
       quote = ch;
       continue;
@@ -283,7 +371,9 @@ function findTopLevelRootPseudo(selector: string): number {
     if (
       parenDepth === 0 &&
       bracketDepth === 0 &&
-      selector.startsWith(":root", i)
+      selector.startsWith(":root", i) &&
+      !isIdentChar(selector[i + 5]) &&
+      selector[i - 1] !== ":"
     ) {
       return i;
     }
@@ -297,10 +387,31 @@ function scopeSingleSelector(selector: string, routePattern: string): string {
   const core = selector.trim();
   if (!core) return selector;
 
+  // Keep ordinary :where() outside the route token (specificity matters).
+  const fn = /^:(is|where)\(/.exec(core);
+  if (fn) {
+    const end = closingParen(core, fn[0].length - 1);
+    const parts = end < 0 ? [] : splitSelectorList(core.slice(fn[0].length, end));
+    if (parts.some(p => /^\s*(?::global\(|:root\b|html\b|body\b)/.test(p))) {
+      const branches = parts
+        .map((part) => scopeSingleSelector(part, routePattern).trim()).join(",");
+      return `${leading}:${fn[1]}(${branches})${core.slice(end + 1)}${trailing}`;
+    }
+  }
+
+  const globalEnd = core.startsWith(":global(") ? closingParen(core, 7) : -1;
+  if (globalEnd === core.length - 1) {
+    return `${leading}${unwrapGlobals(core)}${trailing}`;
+  }
+  const unwrapped = unwrapGlobals(core);
+  if (unwrapped !== core) {
+    return scopeSingleSelector(`${leading}${unwrapped}${trailing}`, routePattern);
+  }
+
   const attribute = `[data-page=${cssString(routePattern)}]`;
   const scope = `body${attribute}`;
 
-  if (core.includes(scope)) return selector;
+  if (hasLexicalToken(core, scope)) return selector;
 
   const bodyIndex = findTopLevelTypeSelector(core, "body");
   if (bodyIndex >= 0) {
@@ -329,7 +440,10 @@ function scopeSingleSelector(selector: string, routePattern: string): string {
 export function scopeSelectorList(
   selector: string,
   routePattern: string,
+  nested = false,
 ): string {
+  // Pass nested=true for Rule children of another Rule, including through @media.
+  if (nested || hasLexicalToken(selector, "&")) return selector;
   return splitSelectorList(selector)
     .map((part) => scopeSingleSelector(part, routePattern))
     .join(",");
