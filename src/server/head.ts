@@ -14,6 +14,7 @@ import {
   isUnsafeUrlAttribute,
   styleObjectToString,
 } from "../shared/attributes";
+
 const headStorage = new AsyncLocalStorage<string[]>();
 let fallbackHeadElements: string[] = [];
 function currentHeadElements(): string[] {
@@ -27,8 +28,58 @@ export function resetHead(): void {
     fallbackHeadElements = [];
   }
 }
+
+function headKey(html: string): string | null {
+  const tag = /^<([a-z][\w:-]*)\b/i.exec(html)?.[1]?.toLowerCase();
+  if (!tag) return null;
+  if (tag === "title") return "title";
+  if (tag !== "meta" && tag !== "link") return null;
+
+  const attrs = new Map<string, string>();
+  const opening = html.slice(0, html.indexOf(">") + 1);
+  const attrPattern =
+    /\s([^\s=/>]+)\s*=\s*"([^"]*)"/g;
+  for (const match of opening.matchAll(attrPattern)) {
+    attrs.set(match[1].toLowerCase(), match[2]);
+  }
+
+  if (tag === "meta") {
+    if (attrs.has("charset")) return "meta:charset";
+    const name = attrs.get("name")?.toLowerCase();
+    if (name) return `meta:name:${name}`;
+    const property = attrs.get("property")?.toLowerCase();
+    if (property) return `meta:property:${property}`;
+    return null;
+  }
+
+  const rel = attrs.get("rel")?.toLowerCase().split(/\s+/);
+  return rel?.includes("canonical") ? "link:canonical" : null;
+}
+
+/** Last wins per title, meta name/property/charset and canonical link; charset and viewport first. */
+export function dedupeHead(elements: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (let i = elements.length - 1; i >= 0; i--) {
+    const key = headKey(elements[i]);
+    if (key !== null) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    result.push(elements[i]);
+  }
+  result.reverse();
+  const priority = (html: string): number => {
+    const key = headKey(html);
+    if (key === "meta:charset") return 0;
+    if (key === "meta:name:viewport") return 1;
+    return 2;
+  };
+  return result.sort((a, b) => priority(a) - priority(b));
+}
+
 export function getHeadElements(): string[] {
-  return [...currentHeadElements()];
+  return dedupeHead(currentHeadElements());
 }
 export interface HeadCollection<T> {
   value: T;
@@ -37,14 +88,14 @@ export interface HeadCollection<T> {
 export function collectHead<T>(fn: () => T): HeadCollection<T> {
   const elements: string[] = [];
   const value = headStorage.run(elements, fn);
-  return { value, head: [...elements] };
+  return { value, head: dedupeHead(elements) };
 }
 export async function collectHeadAsync<T>(
   fn: () => Promise<T>,
 ): Promise<HeadCollection<T>> {
   const elements: string[] = [];
   const value = await headStorage.run(elements, fn);
-  return { value, head: [...elements] };
+  return { value, head: dedupeHead(elements) };
 }
 const VOID_ELEMENTS = new Set(["meta", "link", "base", "col"]);
 type HeadChild = Child | HeadChild[];
@@ -112,6 +163,12 @@ function renderHeadChild(child: HeadChild): string {
   html += `</${tag}>`;
   return html;
 }
+
+/**
+ * Collects head elements during server rendering.
+ * Calling Head from a client-mounted component does not update
+ * document.head; client-side head management is not supported here.
+ */
 export function Head(props: { children?: Child | Child[] }): null {
   const { children } = props;
   if (children === undefined || children === null) return null;

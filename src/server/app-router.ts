@@ -4,7 +4,7 @@ import { dedent } from "ts-dedent";
 import { canonicalPathname, discoverRoutes, matchRoute } from "./router";
 import { createElement } from "../client/render";
 import { renderToString, renderToStringAsync } from "./ssr";
-import { collectHeadAsync } from "./head";
+import { collectHeadAsync, dedupeHead } from "./head";
 import { imports } from "./imports";
 import { injectViewTransitions } from "./document";
 import {
@@ -885,7 +885,8 @@ export function createAppRouter(
       ));
       const shellHtmlOnly = shellRender.value;
       const layoutHeadElements = shellRender.head;
-      const headElements = [...layoutHeadElements, ...pageHeadElements];
+      // The page is collected after its layouts, so its <title>/<meta> win.
+      const headElements = dedupeHead([...layoutHeadElements, ...pageHeadElements]);
 
       let shellHtml = `<!DOCTYPE html>${shellHtmlOnly}`;
       if (stylesVirtualPath) {
