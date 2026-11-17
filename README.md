@@ -19,6 +19,7 @@ TradJS is not a React framework, a single-page application router, or a Node.js 
 - **Interactive SSG:** Prerendered pages include layout and page client scripts, the client bootstrap, the React import map, and route-scoped `page.css`. Middleware runs before cached SSG responses, so authentication checks remain effective. Responses behind middleware are sent with `Cache-Control: no-store`. Expired entries are refilled automatically, with `Cache-Control` max-age matching `revalidate`.
 - **Client initialization before first paint:** The bootstrap runs from `<head>` with `blocking="render"`. Layout initializers run first, followed by the page initializer, each awaited in order before the browser's first paint.
 - **Improved View Transitions:** The router uses the shared document helper, including a `link rel="expect"` readiness marker and reduced-motion handling. Skipped transitions (`AbortError` and `TimeoutError`) no longer trigger the client error overlay.
+- **CSRF protection:** cookie-bearing writes from other sites are refused with 403 (`csrf` option; see Middleware).
 - **Security:** server-rendered pages are sent with `Cache-Control: no-store`, so shared caches never reuse one user's page for another; only public prerendered pages are cacheable. Server rendering drops event props in any case, invalid attribute or tag names, `srcdoc`, and `javascript:`/`vbscript:`/`data:` URLs (raster `data:image/*` stays allowed in `src`, `srcset` and `poster`). `<Head>` collects per request. `renderPage()` escapes `title`, `viewport` and `meta`.
 - **Raw `<style>` and `<script>` text:** their text children are no longer HTML-escaped, so `.card > h2` works in an inline `<style>`; a literal closing tag inside the text is neutralised.
 - **Route compatibility and mobile fixes:** `.js` and `.jsx` page routes correctly pair with `.client.tsx` entries, and the built-in 404 page includes a mobile viewport meta tag.
@@ -544,6 +545,17 @@ Middleware runs on every applicable request, including SSG cache hits and reques
 This allows SSG routes to be protected by middleware without bypassing authorization checks or exposing their responses to shared public caches.
 
 TradJS also exports `cors()` from `tradjs/web` for handler-level cross-origin request handling.
+
+#### Cross-site request forgery (CSRF)
+
+Browsers attach a user's cookies to a form post or `fetch` from any website. TradJS therefore refuses `POST`, `PUT`, `PATCH` and `DELETE` requests that carry cookies and come from another site, with `403`, before any middleware or route runs. It looks at the `Origin` header, or at `Sec-Fetch-Site: cross-site` when there is no `Origin`. Requests without cookies, and clients that send neither header (servers, scripts), are not affected.
+
+```ts
+createAppRouter({ csrf: { allowedOrigins: ["https://admin.example.com"] } }); // allow another site
+createAppRouter({ csrf: false }); // turn the check off
+```
+
+Behind a proxy that rewrites the `Host` header, list the public origin in `allowedOrigins`.
 
 ### 9. Error boundaries
 

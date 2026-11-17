@@ -69,4 +69,12 @@ export interface AppRouterOptions {
   globalCss?: string;
   /** Enable same-origin cross-document View Transitions (default: true). */
   viewTransitions?: boolean;
+  /**
+   * Cross-site request forgery protection (default: on). Cookie-bearing
+   * POST/PUT/PATCH/DELETE from another site get 403. Pass
+   * `{ allowedOrigins: ["https://admin.example"] }` to allow more origins,
+   * or `false` to turn the check off (e.g. when a proxy rewrites Host and
+   * you check origins yourself).
+   */
+  csrf?: boolean | { allowedOrigins?: string[] };
 }

@@ -26,6 +26,7 @@ import {
 import { serve as serveHttp } from "./serve";
 import { withoutResponseBody } from "./response";
 import { isNotFound } from "./not-found";
+import { csrfRejection } from "./csrf";
 import { httpMeasure } from "./measure";
 import type {
   Handler,
@@ -567,6 +568,12 @@ export function createAppRouter(
   registerServerCSSModules();
   const { appDir = path.join(process.cwd(), "app"), viewTransitions = true } =
     options;
+  const csrfOptions =
+    options.csrf === false
+      ? undefined
+      : options.csrf === true || options.csrf === undefined
+        ? {}
+        : options.csrf;
   const routes = discoverRoutes(appDir);
 
   console.log(`📁 Discovered ${routes.length} routes:`);
@@ -743,6 +750,11 @@ export function createAppRouter(
     // The decoded, normalized path: what route matching used, so layouts
     // and the SSG cache see one pathname for /a and /a/.
     const pathname = canonicalPathname(url.pathname) ?? url.pathname;
+    // Before middleware and routes: a forged cross-site write never runs.
+    if (csrfOptions) {
+      const rejected = csrfRejection(req, url, csrfOptions);
+      if (rejected) return rejected;
+    }
     const match = matchRoute(url.pathname, routes);
 
     if (!match) {
