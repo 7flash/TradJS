@@ -26,6 +26,7 @@
 - A client render that throws partway (component, ref callback, later child) no longer leaves half-mounted nodes, listeners or refs behind; the container keeps its previous content and the next `render()` works.
 - Expected view-transition cancellations, including `AbortError` and `TimeoutError` skips, no longer trigger the client error overlay. Unrelated errors remain visible.
 - The 404 page now includes a mobile viewport declaration.
+- The published type declarations work in strict projects: `serve()` no longer names Bun's `Server` without its type argument, and relative imports in `.d.ts` files carry `.js` so `moduleResolution: node16`/`nodenext` resolves them (JSX types were `any` there).
 - The showcase reconnects its event stream after back/forward cache restoration and keeps previously displayed events.
 - The showcase uses dynamic viewport heights with fallbacks and keeps its diagnostics panel visible above mobile keyboards.
 
