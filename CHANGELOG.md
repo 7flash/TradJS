@@ -2,6 +2,10 @@
 
 ## 4.6.0 (2026-11-17)
 
+### Added
+
+- Request `locals`: middleware writes, layouts/pages/error pages read the `locals` prop, API handlers read `ctx.locals`. Types `Locals`, `RouteContext`, `PageProps` from `tradjs/server`.
+
 ### Security
 
 - WebSocket upgrades from another site (a browser `Origin` that is not the app's own) are refused with 403; allow extra sites with `serve(handler, { websocketOrigins: [...] })`.

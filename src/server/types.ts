@@ -9,6 +9,29 @@ export type Handler = (
   req: Request,
 ) => HandlerResponse | Promise<HandlerResponse>;
 
+/**
+ * Per-request values shared from middleware to layouts, pages, error pages
+ * and API handlers. Declare your own shape with the generic parameters:
+ * `RouteContext<{ user: User }>`.
+ */
+export type Locals = Record<string, unknown>;
+
+/** What middleware and API handlers receive as their second argument. */
+export interface RouteContext<L extends object = Locals> {
+  params: Record<string, string>;
+  route: { pattern: string; filePath: string };
+  locals: L;
+}
+
+/** Props of a page or layout component. `children` is set for layouts. */
+export interface PageProps<L extends object = Locals> {
+  params: Record<string, string>;
+  /** Empty for prerendered (SSG) pages: they are shared by every visitor. */
+  locals: Partial<L>;
+  pathname?: string;
+  children?: unknown;
+}
+
 export interface ImportConfig {
   name: string;
   version?: string;

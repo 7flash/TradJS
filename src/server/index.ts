@@ -6,6 +6,9 @@ export type {
   FrontendAppOptions,
   RenderPageOptions,
   AppRouterOptions,
+  Locals,
+  RouteContext,
+  PageProps,
 } from "./types";
 export { imports } from "./imports";
 export { notFound, isNotFound } from "./not-found";
