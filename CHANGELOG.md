@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.6.1 (2026-11-18)
+
+### Security
+- CSRF and websocket origin checks refuse a plain-http page writing to an https server on the same host (a network attacker can inject such a page). An https page reaching an http request URL is still allowed: that is a TLS-terminating proxy in front of the app.
+
+### Fixed
+- Public files: `If-None-Match` uses weak comparison (RFC 9110), so a tag sent back without its `W/` prefix gets 304.
+
+### Tests
+- `tests/request-attack-matrix.test.ts`: 599 hostile and malformed requests (path traversal in every encoding, dotfiles, CSRF variants, Host and X-Forwarded headers, Range abuse, reflected input, error leaks, SSG cache poisoning, middleware bypass) against every route kind, in production and development.
+
 ## 4.6.0 (2026-11-17)
 
 ### Added

@@ -376,7 +376,12 @@ export function isAllowedWebSocketOrigin(
   } catch {
     return false;
   }
-  if (parsed.host === requestUrl.host) return true;
+  // Same host. A page served over plain http must not write to an https
+  // server (a network attacker can inject such a page). The reverse, an
+  // https page reaching an http request URL, is the normal TLS-terminating
+  // proxy setup, so it is allowed.
+  if (parsed.host === requestUrl.host)
+    return !(requestUrl.protocol === "https:" && parsed.protocol === "http:");
   return allowed.some((entry) => {
     try {
       return new URL(entry).origin === parsed.origin;

@@ -63,7 +63,10 @@ export function publicFileResponse(
   const head = req.method === "HEAD";
 
   const ifNoneMatch = req.headers.get("if-none-match");
-  if (ifNoneMatch && ifNoneMatch.split(",").some((tag) => tag.trim() === etag || tag.trim() === "*")) {
+  // If-None-Match uses weak comparison for GET/HEAD (RFC 9110 §13.1.2).
+  // The same entity tag may be supplied with or without the W/ prefix.
+  const weakTag = (tag: string) => tag.trim().replace(/^W\//, "");
+  if (ifNoneMatch && ifNoneMatch.split(",").some((tag) => tag.trim() === "*" || weakTag(tag) === weakTag(etag))) {
     return new Response(null, { status: 304, headers });
   }
 
