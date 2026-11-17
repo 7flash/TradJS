@@ -43,6 +43,7 @@
 
 ### Added
 
+- CLI: `tradjs start` (production), `--host`, graceful shutdown on SIGINT/SIGTERM (the option was dropped before), owner-only Unix sockets, and in production a busy port is an error instead of a silent move.
 - `createBoundary({ fallback })`: a client boundary can render a fallback when its render throws, and `boundary.reset()` retries.
 - `notFound()` from `tradjs/server`: a page, layout or server component can answer 404, rendered with the nearest `not-found.tsx` inside its layouts or the built-in 404 page.
 - `createAppRouter({ mode })` chooses development or production per router (default: `NODE_ENV` when the router is created, no longer when the module is imported), and the returned handler has `ready`, a promise of the number of prerendered pages.
