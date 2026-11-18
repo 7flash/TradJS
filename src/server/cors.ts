@@ -1,4 +1,5 @@
 import type { Handler, HandlerResponse } from "./types";
+import { editHeaders } from "./response";
 
 export type CorsOrigin =
   | "*"
@@ -168,12 +169,6 @@ export function cors(handler: Handler, options: CorsOptions = {}): Handler {
     }
 
     const response = await normalizeResponse(await handler(request));
-    const headers = new Headers(response.headers);
-    applyCorsHeaders(headers, allowedOrigin, options);
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    });
+    return editHeaders(response, (headers) => applyCorsHeaders(headers, allowedOrigin, options));
   };
 }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.6.4 (2026-11-18)
+
+### Fixed
+- A route that returned a plain-text `Response` (for example `new Response("Invalid credentials", { status: 401 })`) was sent as `application/octet-stream`, so browsers downloaded it or showed "This site can't be reached" instead of the message. Bun works out `text/plain` for a string body only when it sends that exact `Response`; adding `X-Request-ID` (every route under `serve()`) and `cors()` copied the response and lost it. Headers are now added to the response itself. Found by running the starter app in a real browser (`scripts/app-e2e.ts`).
+
 ## 4.6.3 (2026-11-18)
 
 ### Security

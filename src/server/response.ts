@@ -27,18 +27,36 @@ export function summarizeHandlerResult(result: HandlerResponse): unknown {
   }
   return { type: "json" };
 }
-export function withRequestId(
+/**
+ * Change a response's headers, in place when they are mutable. Copying the
+ * response loses the Content-Type Bun derives from a string body when it
+ * sends it (`new Response("text")` has no Content-Type header until then),
+ * so a copy went out as application/octet-stream and browsers downloaded it.
+ */
+export function editHeaders(
   response: Response,
-  requestId?: string,
+  edit: (headers: Headers) => void,
 ): Response {
-  if (!requestId) return response;
+  try {
+    edit(response.headers);
+    return response;
+  } catch {
+    // Immutable headers (e.g. Response.error()): copy instead.
+  }
   const headers = new Headers(response.headers);
-  headers.set("X-Request-ID", requestId);
+  edit(headers);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
     headers,
   });
+}
+export function withRequestId(
+  response: Response,
+  requestId?: string,
+): Response {
+  if (!requestId) return response;
+  return editHeaders(response, (headers) => headers.set("X-Request-ID", requestId));
 }
 export function normalizeHandlerResponse(
   result: HandlerResponse,
