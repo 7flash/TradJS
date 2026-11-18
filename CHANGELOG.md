@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.6.5 (2026-11-18)
+
+### Fixed
+- SVG and MathML attributes now get the names and namespaces the HTML parser gives them, in the browser renderer and in server rendering alike (one shared table from the WHATWG "adjust SVG/MathML/foreign attributes" lists and React's SVG names). Checked in Chrome: on 4.6.4 a browser-rendered `<use xlinkHref="#icon">` pointed nowhere (the attribute was literally named `xlink:href` with no namespace), so icon sprites drawn on the client were blank; `tabIndex`, `xmlSpace`/`xml:space`, `xmlnsXlink` and all-lowercase spellings such as `viewbox` also differed between server and browser.
+- The URL check applies to the mapped name, so `xlinkHref="javascript:..."` (any spelling) is refused on both sides.
+- HTML boolean-attribute rules no longer apply to SVG/MathML: `readOnly="x"` on an SVG element keeps its value.
+
+### Known limit
+- `<feDropShadow>` in server HTML parses as `<fedropshadow>` (the HTML parser's SVG tag table predates it), so a server-rendered drop shadow filter does nothing until the client renders it. Render it on the client or use `feGaussianBlur` + `feOffset`.
+
+### Tests
+- `tests/foreign-attributes-matrix.test.ts`: every WHATWG SVG/MathML/foreign attribute and every React SVG name on every SVG and MathML element, first render, update and removal, server HTML parsed vs browser DOM, plus hostile values; the SSR parity matrix now includes SVG/MathML attributes.
+
 ## 4.6.4 (2026-11-18)
 
 ### Fixed

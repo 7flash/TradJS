@@ -24,8 +24,34 @@ import {
   assignElementStyle,
   createDomElement,
   domAttributeName,
+  SVG_NS,
+  MATH_NS,
   setElementClass,
 } from "./dom";
+
+import { foreignAttribute, isEventProp, isSafeHtmlName } from "../shared/attributes";
+
+/**
+ * HTML tokenization keeps the last effective JSX spelling in the client
+ * (the server emits only the last spelling because the parser otherwise keeps
+ * the first duplicate attribute). Track by canonical qualified name.
+ */
+function foreignPropEntries(
+  props: Props,
+  namespace: string,
+): Map<string, [string, unknown]> {
+  const entries = new Map<string, [string, unknown]>();
+  for (const [key, value] of Object.entries(props || {})) {
+    if (key === "children" || key === "key" || key === "ref" ||
+        key === "dangerouslySetInnerHTML" ||
+        !isSafeHtmlName(key) || isEventProp(key)) continue;
+    const mapped = foreignAttribute(key, namespace);
+    // Namespace is part of the identity; a namespaced attribute must not be
+    // removed/recreated as an unnamespaced attribute during a keyed reorder.
+    entries.set(`${mapped.namespace ?? ""}|${mapped.localName}`, [key, value]);
+  }
+  return entries;
+}
 
 export interface Fiber {
   /** Document of the render container; every node of this tree is created in it. */
@@ -505,8 +531,12 @@ function patchProps(
 ): void {
   const safeOldProps = oldProps || {};
   const safeNewProps = newProps || {};
+  const foreignNamespace =
+    el.namespaceURI === SVG_NS || el.namespaceURI === MATH_NS
+      ? el.namespaceURI : null;
   for (const key of Object.keys(safeOldProps)) {
     if (key === "children" || key === "key" || key === "ref") continue;
+    if (foreignNamespace && !isEventProp(key) && key !== "dangerouslySetInnerHTML") continue;
     if (
       key in safeNewProps &&
       !(key.startsWith("on") && typeof safeNewProps[key] !== "function")
@@ -528,6 +558,7 @@ function patchProps(
 
   for (const [key, value] of Object.entries(safeNewProps)) {
     if (key === "children" || key === "key" || key === "ref") continue;
+    if (foreignNamespace && !isEventProp(key) && key !== "dangerouslySetInnerHTML") continue;
     if (isFormStateProp(el, key)) continue;
     if (key === "dangerouslySetInnerHTML") {
       el.innerHTML = value?.__html ?? "";
@@ -543,6 +574,16 @@ function patchProps(
     } else {
       // In particular, never bypass URL / srcdoc validation on updates.
       setDomProp(el, key, value);
+    }
+  }
+  if (foreignNamespace) {
+    const before = foreignPropEntries(safeOldProps, foreignNamespace);
+    const after = foreignPropEntries(safeNewProps, foreignNamespace);
+    for (const [identity, [key]] of before)
+      if (!after.has(identity)) setDomProp(el, key, null);
+    for (const [identity, [key, value]] of after) {
+      if (!before.has(identity) || before.get(identity)![1] !== value)
+        setDomProp(el, key, value);
     }
   }
 }
@@ -894,8 +935,12 @@ function syncFormState(el: Element, props: Props): void {
 
 function applyProps(el: Element, props: Props, fiber: Fiber): void {
   if (!props) return;
+  const foreignNamespace =
+    el.namespaceURI === SVG_NS || el.namespaceURI === MATH_NS
+      ? el.namespaceURI : null;
   for (const [key, value] of Object.entries(props)) {
     if (key === "children" || key === "key" || key === "ref") continue;
+    if (foreignNamespace && !isEventProp(key) && key !== "dangerouslySetInnerHTML") continue;
     if (isFormStateProp(el, key)) continue;
     if (key === "className" || key === "class") {
       setElementClass(el, value);
@@ -913,6 +958,10 @@ function applyProps(el: Element, props: Props, fiber: Fiber): void {
       // names, URL schemes, srcdoc, and false only dropping real booleans.
       setDomProp(el, key, value);
     }
+  }
+  if (foreignNamespace) {
+    for (const [key, value] of foreignPropEntries(props, foreignNamespace).values())
+      setDomProp(el, key, value);
   }
 }
 

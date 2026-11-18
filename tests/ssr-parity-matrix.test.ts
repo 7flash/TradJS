@@ -87,11 +87,8 @@ function generate(rnd: () => number, depth = 0, phrasing = false): Tree {
   if (variant === 7 && depth < 4) return [generate(rnd, depth + 1, phrasing), generate(rnd, depth + 1, phrasing)];
   const tag = pick(rnd, phrasing ? PHRASING : TAGS);
   let attrs = propsFor(rnd, tag);
-  // SVG/MathML keep attribute case and have no HTML props (tabIndex, readOnly,
-  // formAction): only lowercase, non-URL attributes are compared there.
-  if (tag === "svg" || tag === "math")
-    attrs = Object.fromEntries(Object.entries(attrs).filter(([key]) =>
-      key === key.toLowerCase() && key !== "style" && !/^(?:formaction|href|src|action|poster|data|cite|background|srcset|srcdoc)$/.test(key)));
+  // jsdom's MathML elements have no .style (browsers have one): no style there.
+  if (tag === "math") attrs = Object.fromEntries(Object.entries(attrs).filter(([key]) => key !== "style"));
   const inner = phrasing || PHRASING_PARENTS.has(tag);
   if (variant === 8 && depth < 4) return h(Fragment, null, generate(rnd, depth + 1, phrasing), generate(rnd, depth + 1, phrasing));
   if (variant === 9 && depth < 4) return h(Component, null, generate(rnd, depth + 1, phrasing));

@@ -1,6 +1,7 @@
-import { assignElementStyle, domAttributeName, setElementClass } from "./dom";
+import { assignElementStyle, domAttributeName, setElementClass, SVG_NS, MATH_NS } from "./dom";
 import {
   attributeValue,
+  foreignAttribute,
   isEventProp,
   isSafeHtmlName,
   isUnsafeUrlAttribute,
@@ -35,7 +36,14 @@ export function isFormStateProp(el: Element, key: string): boolean {
 }
 export function setDomProp(el: Element, key: string, value: unknown): void {
   if (!isSafeHtmlName(key) || isEventProp(key)) return;
-  const name = domAttributeName(el, key);
+  const foreign = el.namespaceURI === SVG_NS || el.namespaceURI === MATH_NS
+    ? foreignAttribute(key, el.namespaceURI)
+    : null;
+  const name = foreign?.name ?? domAttributeName(el, key);
+  const remove = () => {
+    if (foreign?.namespace) el.removeAttributeNS(foreign.namespace, foreign.localName);
+    else el.removeAttribute(name);
+  };
   if (!isSafeHtmlName(name) || isEventProp(name)) return;
   const checkedValue =
     name.toLowerCase() === "style" && value && typeof value === "object"
@@ -43,7 +51,7 @@ export function setDomProp(el: Element, key: string, value: unknown): void {
       : value;
   if (name.toLowerCase() === "srcdoc" || isUnsafeUrlAttribute(name, checkedValue)) {
     // Same rule as server rendering; also drop a value set by an earlier render.
-    el.removeAttribute(name);
+    remove();
     return;
   }
   if (key === "className" || key === "class") {
@@ -79,7 +87,8 @@ export function setDomProp(el: Element, key: string, value: unknown): void {
   ) {
     (el as unknown as Record<string, unknown>)[key] = Boolean(value);
   }
-  const serialized = attributeValue(name, value);
-  if (serialized === null) el.removeAttribute(name);
+  const serialized = attributeValue(name, value, foreign !== null);
+  if (serialized === null) remove();
+  else if (foreign?.namespace) el.setAttributeNS(foreign.namespace, name, serialized);
   else el.setAttribute(name, serialized);
 }

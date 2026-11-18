@@ -1,4 +1,4 @@
-import { attributeName, cssPropertyName } from "../shared/attributes";
+import { attributeName, cssPropertyName, foreignAttribute } from "../shared/attributes";
 export { SVG_ATTR_MAP } from "../shared/attributes";
 export const SVG_NS = "http://www.w3.org/2000/svg";
 export const MATH_NS = "http://www.w3.org/1998/Math/MathML";
@@ -98,10 +98,12 @@ export function createDomElement(
       : doc.createElement(tag);
 }
 export function domAttributeName(el: Element, key: string): string {
-  return attributeName(key);
+  return el.namespaceURI === SVG_NS || el.namespaceURI === MATH_NS
+    ? foreignAttribute(key, el.namespaceURI).name
+    : attributeName(key);
 }
 export function setElementClass(el: Element, value: unknown): void {
-  if (isSvgElement(el)) {
+  if (isSvgElement(el) || el.namespaceURI === MATH_NS) {
     if (value == null || value === false) el.removeAttribute("class");
     else el.setAttribute("class", String(value));
     return;

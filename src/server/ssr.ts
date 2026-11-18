@@ -10,11 +10,28 @@ import { isRawTextElement, neutralizeRawTextEndTag, rawTextOf } from "./html";
 import {
   attributeName,
   attributeValue,
+  foreignAttribute,
   isEventProp,
   isSafeHtmlName,
   isUnsafeUrlAttribute,
   styleObjectToString,
 } from "../shared/attributes";
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const MATH_NS = "http://www.w3.org/1998/Math/MathML";
+type ForeignNamespace = typeof SVG_NS | typeof MATH_NS | null;
+
+function elementNamespace(tag: string, inherited: ForeignNamespace): ForeignNamespace {
+  if (tag === "svg") return SVG_NS;
+  if (tag === "math") return MATH_NS;
+  return inherited;
+}
+function childNamespace(tag: string, namespace: ForeignNamespace, props: Record<string, any>): ForeignNamespace {
+  if (namespace === SVG_NS && tag === "foreignObject") return null;
+  if (namespace === MATH_NS && tag === "annotation-xml" &&
+      String(props.encoding ?? "").toLowerCase() === "text/html") return null;
+  return namespace;
+}
 
 const ESCAPE_MAP: Record<string, string> = {
   "&": "&amp;",
@@ -55,15 +72,18 @@ function isPromiseLike<T = unknown>(value: unknown): value is PromiseLike<T> {
   );
 }
 
-function renderAttributes(propsObj: Record<string, any>): string {
+function renderAttributes(propsObj: Record<string, any>, namespace: ForeignNamespace): string {
+  const resolve = (key: string) => namespace
+    ? foreignAttribute(key, namespace).name
+    : attributeName(key);
   let html = "";
   const entries = Object.entries(propsObj);
   for (const [index, [key, value]] of entries.entries()) {
     // HTML parsers keep the first duplicate attribute, but the DOM renderer
     // applies the last JSX prop. Resolve aliases before emitting markup.
-    const mapped = attributeName(key).toLowerCase();
+    const mapped = resolve(key).toLowerCase();
     if (entries.slice(index + 1).some(([later]) =>
-      !isEventProp(later) && attributeName(later).toLowerCase() === mapped
+      !isEventProp(later) && resolve(later).toLowerCase() === mapped
     )) continue;
     if (
       key === "children" ||
@@ -80,7 +100,7 @@ function renderAttributes(propsObj: Record<string, any>): string {
     if (value === undefined || value === null) continue;
     // The browser renderer removes a falsy class instead of serializing "false".
     if ((key === "class" || key === "className") && value === false) continue;
-    const name = attributeName(key);
+    const name = resolve(key);
     // Check a style object as the CSS text it becomes (url(javascript:...)).
     const checkedValue =
       name.toLowerCase() === "style" && typeof value === "object"
@@ -101,7 +121,7 @@ function renderAttributes(propsObj: Record<string, any>): string {
     }
     // true on a non-boolean attribute (aria-hidden, draggable, data-*) is the
     // string "true": a bare name would mean "" ("auto" or invalid), not true.
-    const serialized = attributeValue(name, value);
+    const serialized = attributeValue(name, value, namespace != null);
     if (serialized === null) continue;
     html += serialized === "" ? ` ${name}` : ` ${name}="${escapeHtml(serialized)}"`;
   }
@@ -134,6 +154,10 @@ function selectChildren(children: any, value: unknown): any {
 }
 
 export function renderToString(vnode: VNode | Child): string {
+  return renderNode(vnode, null);
+}
+
+function renderNode(vnode: VNode | Child, inherited: ForeignNamespace): string {
   if (
     vnode === null ||
     vnode === undefined ||
@@ -145,11 +169,11 @@ export function renderToString(vnode: VNode | Child): string {
   if (typeof vnode === "string") return escapeHtml(vnode);
   if (typeof vnode === "number") return String(vnode);
   if (Array.isArray(vnode)) {
-    return vnode.map((child) => renderToString(child)).join("");
+    return vnode.map((child) => renderNode(child, inherited)).join("");
   }
 
   const { type, props } = vnode as VNode;
-  if (type === Fragment) return renderChildrenToString(props?.children);
+  if (type === Fragment) return renderChildrenToString(props?.children, inherited);
 
   if (typeof type === "function") {
     if (type === Head) {
@@ -166,7 +190,7 @@ export function renderToString(vnode: VNode | Child): string {
       error.componentName = componentName;
       throw error;
     }
-    return renderToString(result);
+    return renderNode(result, inherited);
   }
 
   const tagName = type as string;
@@ -175,7 +199,8 @@ export function renderToString(vnode: VNode | Child): string {
   const lowerTag = tagName.toLowerCase();
   const attrs = lowerTag === "select" || lowerTag === "textarea"
     ? { ...propsObj, value: undefined } : propsObj;
-  let html = `<${tagName}${renderAttributes(attrs)}>`;
+  const namespace = elementNamespace(tagName, inherited);
+  let html = `<${tagName}${renderAttributes(attrs, namespace)}>`;
 
   if (VOID_ELEMENTS.has(tagName)) return html;
 
@@ -188,7 +213,7 @@ export function renderToString(vnode: VNode | Child): string {
       ? selectChildren(propsObj.children, propsObj.value) : propsObj.children;
     const body = lowerTag === "textarea" && propsObj.value != null
       ? escapeHtml(String(propsObj.value))
-      : renderChildrenToString(children);
+      : renderChildrenToString(children, childNamespace(tagName, namespace, propsObj));
     // HTML parsing strips the first LF after a pre/textarea start tag.
     html += /^(?:pre|textarea)$/i.test(tagName) && body.startsWith("\n") ? "\n" + body : body;
   }
@@ -200,8 +225,15 @@ export function renderToString(vnode: VNode | Child): string {
 export async function renderToStringAsync(
   vnode: VNode | Child | PromiseLike<VNode | Child>,
 ): Promise<string> {
+  return renderNodeAsync(vnode, null);
+}
+
+async function renderNodeAsync(
+  vnode: VNode | Child | PromiseLike<VNode | Child>,
+  inherited: ForeignNamespace,
+): Promise<string> {
   if (isPromiseLike<VNode | Child>(vnode)) {
-    return renderToStringAsync(await vnode);
+    return renderNodeAsync(await vnode, inherited);
   }
   if (
     vnode === null ||
@@ -216,13 +248,13 @@ export async function renderToStringAsync(
   if (Array.isArray(vnode)) {
     let html = "";
     for (const child of vnode) {
-      html += await renderToStringAsync(child);
+      html += await renderNodeAsync(child, inherited);
     }
     return html;
   }
 
   const { type, props } = vnode as VNode;
-  if (type === Fragment) return renderChildrenAsync(props?.children);
+  if (type === Fragment) return renderChildrenAsync(props?.children, inherited);
 
   if (typeof type === "function") {
     if (type === Head) {
@@ -230,7 +262,7 @@ export async function renderToStringAsync(
       return "";
     }
     const result = (type as Component<any> | AsyncComponent<any>)(props || {});
-    return renderToStringAsync(result);
+    return renderNodeAsync(result, inherited);
   }
 
   const tagName = type as string;
@@ -239,7 +271,8 @@ export async function renderToStringAsync(
   const lowerTag = tagName.toLowerCase();
   const attrs = lowerTag === "select" || lowerTag === "textarea"
     ? { ...propsObj, value: undefined } : propsObj;
-  let html = `<${tagName}${renderAttributes(attrs)}>`;
+  const namespace = elementNamespace(tagName, inherited);
+  let html = `<${tagName}${renderAttributes(attrs, namespace)}>`;
 
   if (VOID_ELEMENTS.has(tagName)) return html;
 
@@ -252,7 +285,7 @@ export async function renderToStringAsync(
       ? selectChildren(propsObj.children, propsObj.value) : propsObj.children;
     const body = lowerTag === "textarea" && propsObj.value != null
       ? escapeHtml(String(propsObj.value))
-      : await renderChildrenAsync(children);
+      : await renderChildrenAsync(children, childNamespace(tagName, namespace, propsObj));
     html += /^(?:pre|textarea)$/i.test(tagName) && body.startsWith("\n") ? "\n" + body : body;
   }
 
@@ -260,24 +293,26 @@ export async function renderToStringAsync(
   return html;
 }
 
-function renderChildrenToString(children: Child | Child[] | undefined): string {
+function renderChildrenToString(
+  children: Child | Child[] | undefined,
+  inherited: ForeignNamespace,
+): string {
   if (children === undefined || children === null) return "";
   if (Array.isArray(children)) {
-    return children.map((child) => renderToString(child)).join("");
+    return children.map((child) => renderNode(child, inherited)).join("");
   }
-  return renderToString(children);
+  return renderNode(children, inherited);
 }
 
 async function renderChildrenAsync(
   children: Child | Child[] | undefined,
+  inherited: ForeignNamespace,
 ): Promise<string> {
   if (children === undefined || children === null) return "";
   if (Array.isArray(children)) {
     let html = "";
-    for (const child of children) {
-      html += await renderToStringAsync(child);
-    }
+    for (const child of children) html += await renderNodeAsync(child, inherited);
     return html;
   }
-  return renderToStringAsync(children);
+  return renderNodeAsync(children, inherited);
 }
